@@ -31,12 +31,11 @@ export async function verifySupabaseConnection() {
   const { error } = await supabase
     .from('conversations')
     .select('id', { count: 'exact', head: true });
-  if (error && error.code !== 'PGRST205') {
+  if (error) {
     throw new Error(`Supabase connection check failed: ${error.message}`);
   }
   return true;
 }
-
 export function __resetClientForTests() {
   cachedClient = null;
 }
