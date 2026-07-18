@@ -5,9 +5,11 @@ const { mockFrom, mockSelect } = vi.hoisted(() => {
   const mockFrom = vi.fn(() => ({ select: mockSelect }));
   return { mockFrom, mockSelect };
 });
+
 vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(() => ({ from: mockFrom })),
 }));
+
 const ORIGINAL_ENV = { ...process.env };
 
 describe('supabaseClient', () => {
@@ -49,7 +51,6 @@ describe('supabaseClient', () => {
     expect(clientA).toBe(clientB);
   });
 });
-
 describe('verifySupabaseConnection', () => {
   beforeEach(() => {
     vi.resetModules();

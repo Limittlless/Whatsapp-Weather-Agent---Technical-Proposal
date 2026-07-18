@@ -22,8 +22,10 @@
   "author": "LIMITLESS",
   "license": "ISC",
   "dependencies": {
+    "@langchain/core": "^1.2.3",
     "@supabase/supabase-js": "^2.110.7",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
