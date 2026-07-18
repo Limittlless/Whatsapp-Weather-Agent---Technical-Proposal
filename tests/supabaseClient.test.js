@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
+vi.mock('dotenv/config', () => ({}));
+
 const { mockFrom, mockSelect } = vi.hoisted(() => {
   const mockSelect = vi.fn();
   const mockFrom = vi.fn(() => ({ select: mockSelect }));
