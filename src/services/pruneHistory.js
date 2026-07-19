@@ -29,9 +29,9 @@ function groupIntoUnits(history) {
   return units;
 }
 
-export function pruneHistory(history, maxMessages = 20) {
-  if (!Array.isArray(history) || history.length <= maxMessages) {
-    return history ?? [];
+function pruneWithoutLeadingSystemMessage(history, maxMessages) {
+  if (history.length <= maxMessages) {
+    return history;
   }
   const naiveStart = history.length - maxMessages;
   const units = groupIntoUnits(history);
@@ -47,4 +47,22 @@ export function pruneHistory(history, maxMessages = 20) {
     index = unitEnd;
   }
   return history.slice(safeStart);
+}
+
+export function pruneHistory(history, maxMessages = 20) {
+  if (!Array.isArray(history) || history.length === 0) {
+    return history ?? [];
+  }
+
+  const hasLeadingSystemMessage = history[0]?.role === 'system';
+
+  if (!hasLeadingSystemMessage) {
+    return pruneWithoutLeadingSystemMessage(history, maxMessages);
+  }
+
+  const systemMessage = history[0];
+  const rest = history.slice(1);
+  const budgetForRest = Math.max(maxMessages - 1, 1);
+
+  return [systemMessage, ...pruneWithoutLeadingSystemMessage(rest, budgetForRest)];
 }

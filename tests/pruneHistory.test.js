@@ -96,4 +96,50 @@ describe('pruneHistory', () => {
     expect(result).toEqual(history.slice(2));
     expect(result.length).toBe(6);
   });
+
+  it('always preserves a leading system message, even in a long conversation', () => {
+    const systemMsg = { role: 'system', content: 'SYSTEM PROMPT' };
+    const turns = [];
+    for (let i = 0; i < 25; i += 1) {
+      turns.push(i % 2 === 0 ? userMsg(`msg ${i}`) : assistantMsg(`msg ${i}`));
+    }
+
+    const history = [systemMsg, ...turns];
+    const result = pruneHistory(history, 20);
+
+    expect(result[0]).toEqual(systemMsg);
+    expect(result.filter((m) => m.role === 'system')).toHaveLength(1);
+    expect(result.length).toBe(20);
+  });
+
+  it('does not add a system message that was never there', () => {
+    const history = [userMsg('1'), assistantMsg('2'), userMsg('3')];
+
+    const result = pruneHistory(history, 2);
+
+    expect(result.some((m) => m.role === 'system')).toBe(false);
+  });
+
+  it('keeps the system message safe even when a tool-call group straddles the boundary', () => {
+    const systemMsg = { role: 'system', content: 'SYSTEM PROMPT' };
+    const history = [
+      systemMsg,
+      userMsg('old message 1'),
+      userMsg('old message 2'),
+      userMsg('What is the weather in Cairo?'),
+      assistantToolCallMsg(null, ['call_1']),
+      toolResultMsg('call_1', '{"temp": 32}'),
+      assistantMsg('It is 32°C in Cairo.'),
+    ];
+
+    const result = pruneHistory(history, 3);
+
+    expect(result[0]).toEqual(systemMsg);
+    expect(result).toEqual([
+      systemMsg,
+      assistantToolCallMsg(null, ['call_1']),
+      toolResultMsg('call_1', '{"temp": 32}'),
+      assistantMsg('It is 32°C in Cairo.'),
+    ]);
+  });
 });
