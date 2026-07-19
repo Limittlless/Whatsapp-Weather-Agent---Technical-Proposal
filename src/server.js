@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 
 import { createCloudApiWebhookRouter } from './gateways/cloudApiWebhook.js';
@@ -28,7 +29,10 @@ function buildApp() {
   return app;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isRunDirectly =
+  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+
+if (isRunDirectly) {
   const app = buildApp();
 
   app.listen(PORT, () => {
