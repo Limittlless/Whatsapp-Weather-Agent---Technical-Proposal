@@ -316,7 +316,7 @@ describe('createCloudApiWebhookRouter', () => {
         .post('/webhook')
         .set('X-Hub-Signature-256', signature)
         .set('Content-Type', 'application/json')
-        .send(rawBody);
+        .send(rawBody.toString('utf8'));
 
       expect(response.status).toBe(200);
     });
