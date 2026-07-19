@@ -87,6 +87,8 @@ async function handleIncomingMessage(
       return;
     }
 
+    sendMessageFn.sendTypingIndicator?.(messageId);
+
     const reply = await runAgentFn({ whatsappId, userMessage });
     await sendMessageFn(whatsappId, reply);
   } catch (error) {

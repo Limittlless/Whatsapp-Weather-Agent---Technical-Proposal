@@ -81,10 +81,11 @@ export async function runAgent({
       if (toolCalls.length > 0) {
         messages.push(aiMessage);
 
-        for (const toolCall of toolCalls) {
-          const toolMessage = await executeToolCall(toolCall);
-          messages.push(toolMessage);
-        }
+        const toolMessages = await Promise.all(
+          toolCalls.map((toolCall) => executeToolCall(toolCall)),
+        );
+
+        messages.push(...toolMessages);
 
         continue;
       }
@@ -118,7 +119,14 @@ export async function runAgent({
         messages.map(toStoredMessage),
       );
 
-      await saveConversationHistory(whatsappId, updatedHistory);
+      saveConversationHistory(whatsappId, updatedHistory).catch(
+        (saveError) => {
+          console.error(
+            '[agent] Failed to save conversation history:',
+            saveError,
+          );
+        },
+      );
 
       return aiMessage.content;
     }
