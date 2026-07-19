@@ -15,20 +15,28 @@ import {
 } from './messageMapper.js';
 
 const MAX_ITERATIONS = 5;
+const WHATSAPP_TEXT_LIMIT = 4096;
+const SUSPICIOUSLY_LONG_REPLY_LENGTH = 3500;
 
 function parseRawFunctionCallText(content) {
   if (typeof content !== 'string') {
     return null;
   }
 
-  const trimmed = content.trim();
-
-  if (!trimmed.startsWith('{') || !trimmed.includes('"functionCall"')) {
+  if (!content.includes('"functionCall"')) {
     return null;
   }
 
+  const jsonStart = content.indexOf('{');
+
+  if (jsonStart === -1) {
+    return null;
+  }
+
+  const candidate = content.slice(jsonStart).trim();
+
   try {
-    const parsed = JSON.parse(trimmed);
+    const parsed = JSON.parse(candidate);
     const call = parsed?.functionCall;
 
     if (parsed?.type === 'functionCall' && call?.name) {
@@ -43,6 +51,25 @@ function parseRawFunctionCallText(content) {
   }
 
   return null;
+}
+
+function isDegenerateReply(content) {
+  if (typeof content !== 'string' || content.trim().length === 0) {
+    return true;
+  }
+
+  if (content.length > SUSPICIOUSLY_LONG_REPLY_LENGTH) {
+    return true;
+  }
+
+  if (
+    content.includes('"functionCall"') ||
+    content.includes('"thoughtSignature"')
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 export async function runAgent({
@@ -111,6 +138,32 @@ export async function runAgent({
         );
 
         continue;
+      }
+
+      if (isDegenerateReply(aiMessage.content)) {
+        console.error(
+          `[agent] Discarding a malformed model reply (length=${
+            typeof aiMessage.content === 'string'
+              ? aiMessage.content.length
+              : 'n/a'
+          }). Not sending it to WhatsApp and not saving it to history, ` +
+            'so it cannot poison the next turn.',
+        );
+
+        const updatedHistory = pruneHistory(
+          messages.map(toStoredMessage),
+        );
+
+        saveConversationHistory(whatsappId, updatedHistory).catch(
+          (saveError) => {
+            console.error(
+              '[agent] Failed to save conversation history:',
+              saveError,
+            );
+          },
+        );
+
+        return 'عذرًا، حدث خطأ أثناء معالجة طلبك. من فضلك أعد إرسال سؤالك.';
       }
 
       messages.push(aiMessage);

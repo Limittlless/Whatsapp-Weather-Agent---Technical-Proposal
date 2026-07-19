@@ -37,7 +37,7 @@ describe('createCloudApiSender', () => {
     const [url, options] = fetchMock.mock.calls[0];
 
     expect(url).toBe(
-      'https://graph.facebook.com/v20.0/1234567890/messages'
+      'https://graph.facebook.com/v23.0/1234567890/messages'
     );
     expect(options.method).toBe('POST');
     expect(options.headers.Authorization).toBe('Bearer test-access-token');

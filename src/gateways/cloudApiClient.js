@@ -1,7 +1,8 @@
-const GRAPH_API_VERSION = 'v20.0';
+const GRAPH_API_VERSION = 'v23.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 const REQUEST_TIMEOUT_MS = 8000;
 
+const WHATSAPP_TEXT_LIMIT = 4096;
 const TYPING_INDICATOR_TIMEOUT_MS = 4000;
 
 export function createCloudApiSender({ phoneNumberId, accessToken }) {
@@ -20,6 +21,18 @@ export function createCloudApiSender({ phoneNumberId, accessToken }) {
 
     if (!body?.trim()) {
       throw new Error('A non-empty message body is required.');
+    }
+
+    let safeBody = body;
+
+    if (body.length > WHATSAPP_TEXT_LIMIT) {
+      console.error(
+        `[cloudApiClient] Message body is ${body.length} chars, over ` +
+          `WhatsApp's ${WHATSAPP_TEXT_LIMIT}-char limit. Truncating ` +
+          'instead of letting the send fail outright — this should ' +
+          'be investigated upstream (see the agent-side reply guard).',
+      );
+      safeBody = `${body.slice(0, WHATSAPP_TEXT_LIMIT - 1)}…`;
     }
 
     const url = `${GRAPH_API_BASE}/${phoneNumberId}/messages`;
@@ -43,7 +56,7 @@ export function createCloudApiSender({ phoneNumberId, accessToken }) {
           messaging_product: 'whatsapp',
           to,
           type: 'text',
-          text: { body },
+          text: { body: safeBody },
         }),
       });
     } catch (error) {

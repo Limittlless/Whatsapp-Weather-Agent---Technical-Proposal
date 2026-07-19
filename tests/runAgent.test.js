@@ -228,4 +228,83 @@ describe('runAgent', () => {
 
     expect(toolResultCount).toBe(assistantToolCallCount);
   });
+
+  it('discards an oversized/degenerate reply instead of sending or saving it', async () => {
+    const degenerateContent = 'a'.repeat(4000);
+
+    const model = {
+      invoke: vi.fn().mockResolvedValue(
+        new AIMessage({ content: degenerateContent }),
+      ),
+    };
+
+    const result = await runAgent({
+      whatsappId: '212600000000',
+      userMessage: 'What is the weather?',
+      model,
+    });
+
+    expect(result).not.toBe(degenerateContent);
+    expect(result.length).toBeLessThan(200);
+
+    expect(saveConversationHistory).toHaveBeenCalledTimes(1);
+    const [, savedHistory] = saveConversationHistory.mock.calls[0];
+    expect(
+      savedHistory.some((m) => m.content === degenerateContent),
+    ).toBe(false);
+  });
+
+  it('discards a reply that leaks a raw functionCall/thoughtSignature blob', async () => {
+    const leakedContent =
+      'دعني أتحقق{"thoughtSignature":"xyz","type":"functionCall","functionCall":{"name":"get_current_weather","args":{}}}';
+
+    const model = {
+      invoke: vi.fn().mockResolvedValue(
+        new AIMessage({ content: leakedContent }),
+      ),
+    };
+
+    const result = await runAgent({
+      whatsappId: '212600000000',
+      userMessage: 'What is the weather?',
+      model,
+    });
+
+    expect(result).not.toBe(leakedContent);
+    expect(result).not.toContain('functionCall');
+  });
+
+  it('recovers a raw function call even when prefixed with model chatter', async () => {
+    const firstResponse = new AIMessage({
+      content:
+        'One moment{"type":"functionCall","functionCall":{"name":"geocode_location","args":{"location":"Cairo"},"id":"call-9"}}',
+    });
+
+    const finalResponse = new AIMessage({ content: 'It is warm in Cairo.' });
+
+    const model = {
+      invoke: vi
+        .fn()
+        .mockResolvedValueOnce(firstResponse)
+        .mockResolvedValueOnce(finalResponse),
+    };
+
+    executeToolCall.mockResolvedValue({
+      getType: () => 'tool',
+      content: '{"latitude":30.04,"longitude":31.24}',
+      tool_call_id: 'call-9',
+      name: 'geocode_location',
+    });
+
+    const result = await runAgent({
+      whatsappId: '212600000000',
+      userMessage: 'Weather in Cairo?',
+      model,
+    });
+
+    expect(result).toBe('It is warm in Cairo.');
+    expect(executeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'geocode_location' }),
+    );
+  });
 });
