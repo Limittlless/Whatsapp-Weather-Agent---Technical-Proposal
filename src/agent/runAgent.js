@@ -1,3 +1,5 @@
+import { AIMessage, HumanMessage } from '@langchain/core/messages';
+
 import { createGeminiModel } from '../config/geminiClient.js';
 import {
   getConversationHistory,
@@ -13,6 +15,35 @@ import {
 } from './messageMapper.js';
 
 const MAX_ITERATIONS = 5;
+
+function parseRawFunctionCallText(content) {
+  if (typeof content !== 'string') {
+    return null;
+  }
+
+  const trimmed = content.trim();
+
+  if (!trimmed.startsWith('{') || !trimmed.includes('"functionCall"')) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    const call = parsed?.functionCall;
+
+    if (parsed?.type === 'functionCall' && call?.name) {
+      return {
+        name: call.name,
+        args: call.args ?? {},
+        id: call.id ?? `raw_${Date.now()}`,
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
 
 export async function runAgent({
   whatsappId,
@@ -45,27 +76,51 @@ export async function runAgent({
     ) {
       const aiMessage = await activeModel.invoke(messages);
 
-      messages.push(aiMessage);
-
       const toolCalls = aiMessage.tool_calls ?? [];
 
-      if (toolCalls.length === 0) {
-        const updatedHistory = pruneHistory(
-          messages.map(toStoredMessage),
-        );
+      if (toolCalls.length > 0) {
+        messages.push(aiMessage);
 
-        await saveConversationHistory(
-          whatsappId,
-          updatedHistory,
-        );
+        for (const toolCall of toolCalls) {
+          const toolMessage = await executeToolCall(toolCall);
+          messages.push(toolMessage);
+        }
 
-        return aiMessage.content;
+        continue;
       }
 
-      for (const toolCall of toolCalls) {
-        const toolMessage = await executeToolCall(toolCall);
-        messages.push(toolMessage);
+      const recoveredCall = parseRawFunctionCallText(aiMessage.content);
+
+      if (recoveredCall) {
+        console.warn(
+          `[agent] Recovered a raw function call from model text output: ${recoveredCall.name}`,
+        );
+
+        messages.push(new AIMessage('One moment, let me check that.'));
+
+        const toolMessage = await executeToolCall(recoveredCall);
+
+        messages.push(
+          new HumanMessage(
+            `[tool result for ${recoveredCall.name}]: ${toolMessage.content}\n\n` +
+              "Use this information to answer the user's last message " +
+              'directly, in the same language they used, without ' +
+              'mentioning tools, JSON, or any internal system details.',
+          ),
+        );
+
+        continue;
       }
+
+      messages.push(aiMessage);
+
+      const updatedHistory = pruneHistory(
+        messages.map(toStoredMessage),
+      );
+
+      await saveConversationHistory(whatsappId, updatedHistory);
+
+      return aiMessage.content;
     }
 
     throw new Error(
