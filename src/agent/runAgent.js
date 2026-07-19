@@ -23,8 +23,6 @@ export async function runAgent({
     throw new Error('whatsappId is required.');
   }
 
-  // Declared here (not inside the try block) so the catch block can still
-  // reach whatever was built before the failure and persist it.
   let messages;
 
   try {
@@ -76,13 +74,6 @@ export async function runAgent({
   } catch (error) {
     console.error('[agent] Execution failed:', error);
 
-    // `messages` only ever contains complete tool-call groups: a new
-    // message is only pushed once the previous iteration's assistant
-    // tool_calls already got all of their matching tool results appended
-    // (see the loop above). So whatever iteration we failed on, what's
-    // already in `messages` is always safe to persist — this preserves
-    // the user's message and any completed tool exchanges from this turn
-    // instead of silently losing them from the next session's context.
     if (Array.isArray(messages) && messages.length > 0) {
       try {
         const updatedHistory = pruneHistory(

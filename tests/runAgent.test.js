@@ -170,11 +170,6 @@ describe('runAgent', () => {
       'Sorry, I could not process your request right now. Please try again shortly.',
     );
 
-    // The failure happened on the very first model.invoke() call, before
-    // any assistant/tool message was pushed — so what gets saved is just
-    // the prepared history (system + user message), not a partial or
-    // dangling state. This preserves the user's message instead of
-    // silently losing it from the next session's context.
     expect(saveConversationHistory).toHaveBeenCalledTimes(1);
 
     const [savedWhatsappId, savedHistory] =
@@ -202,8 +197,6 @@ describe('runAgent', () => {
     });
 
     const model = {
-      // Always returns another tool call, forcing the loop to hit
-      // MAX_ITERATIONS every time.
       invoke: vi.fn().mockResolvedValue(toolCallResponse),
     };
 
@@ -225,8 +218,6 @@ describe('runAgent', () => {
     );
     expect(saveConversationHistory).toHaveBeenCalledTimes(1);
 
-    // Every assistant tool_calls message must have its matching tool
-    // result present — no orphans, even mid-failure.
     const [, savedHistory] = saveConversationHistory.mock.calls[0];
     const assistantToolCallCount = savedHistory.filter(
       (m) => m.role === 'assistant' && m.tool_calls?.length,

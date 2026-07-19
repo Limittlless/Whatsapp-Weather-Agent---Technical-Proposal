@@ -113,8 +113,6 @@ describe('createCloudApiWebhookRouter', () => {
 
       await request(app).post('/webhook').send(payload);
 
-      // POST responds synchronously before message handling finishes, so
-      // give the in-flight async handler a tick to complete.
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(runAgentFn).toHaveBeenCalledWith({
