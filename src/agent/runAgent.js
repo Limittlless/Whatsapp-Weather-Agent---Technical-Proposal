@@ -45,13 +45,6 @@ function parseRawFunctionCallText(content) {
   return null;
 }
 
-function looksLikeLeakedInternalArtifact(content) {
-  return (
-    typeof content === 'string' &&
-    (content.includes('thoughtSignature') || content.includes('"functionCall"'))
-  );
-}
-
 export async function runAgent({
   whatsappId,
   userMessage,
@@ -88,10 +81,11 @@ export async function runAgent({
       if (toolCalls.length > 0) {
         messages.push(aiMessage);
 
-        for (const toolCall of toolCalls) {
-          const toolMessage = await executeToolCall(toolCall);
-          messages.push(toolMessage);
-        }
+        const toolMessages = await Promise.all(
+          toolCalls.map((toolCall) => executeToolCall(toolCall)),
+        );
+
+        messages.push(...toolMessages);
 
         continue;
       }
@@ -119,28 +113,20 @@ export async function runAgent({
         continue;
       }
 
-      if (looksLikeLeakedInternalArtifact(aiMessage.content)) {
-        console.error(
-          '[agent] Blocked a leaked internal artifact from being sent to the user:',
-          aiMessage.content,
-        );
-
-        const updatedHistory = pruneHistory(
-          messages.map(toStoredMessage),
-        );
-
-        await saveConversationHistory(whatsappId, updatedHistory);
-
-        return 'Sorry, I could not process your request right now. Please try again shortly.';
-      }
-
       messages.push(aiMessage);
 
       const updatedHistory = pruneHistory(
         messages.map(toStoredMessage),
       );
 
-      await saveConversationHistory(whatsappId, updatedHistory);
+      saveConversationHistory(whatsappId, updatedHistory).catch(
+        (saveError) => {
+          console.error(
+            '[agent] Failed to save conversation history:',
+            saveError,
+          );
+        },
+      );
 
       return aiMessage.content;
     }
