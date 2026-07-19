@@ -20,7 +20,9 @@ export function createGeminiModel() {
   const model = new ChatGoogle({
     model: modelName,
     apiKey,
-    temperature: 0.4,
+    reasoningEffort: 'low',
+    maxOutputTokens: 300,
+    maxRetries: 1,
   });
 
   return model.bindTools(agentTools);
