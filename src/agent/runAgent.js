@@ -3,6 +3,7 @@ import {
   getConversationHistory,
   saveConversationHistory,
 } from '../services/conversationStore.js';
+import { pruneHistory } from '../services/pruneHistory.js';
 
 import { prepareConversationHistory } from './conversationContext.js';
 import { executeToolCall } from './executeToolCall.js';
@@ -13,29 +14,6 @@ import {
 
 const MAX_ITERATIONS = 5;
 
-const FALLBACK_MESSAGE =
-  'Sorry, I could not process your request right now. Please try again shortly.';
-
-async function saveHistorySafely(whatsappId, messages) {
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return;
-  }
-
-  try {
-    const storedHistory = messages.map(toStoredMessage);
-
-    await saveConversationHistory(
-      whatsappId,
-      storedHistory,
-    );
-  } catch (error) {
-    console.error(
-      '[agent] Failed to save conversation history:',
-      error,
-    );
-  }
-}
-
 export async function runAgent({
   whatsappId,
   userMessage,
@@ -45,7 +23,7 @@ export async function runAgent({
     throw new Error('whatsappId is required.');
   }
 
-  let messages = [];
+  let messages;
 
   try {
     const activeModel = model ?? createGeminiModel();
@@ -69,19 +47,23 @@ export async function runAgent({
 
       messages.push(aiMessage);
 
-      const toolCalls = Array.isArray(aiMessage.tool_calls)
-        ? aiMessage.tool_calls
-        : [];
+      const toolCalls = aiMessage.tool_calls ?? [];
 
       if (toolCalls.length === 0) {
-        await saveHistorySafely(whatsappId, messages);
+        const updatedHistory = pruneHistory(
+          messages.map(toStoredMessage),
+        );
+
+        await saveConversationHistory(
+          whatsappId,
+          updatedHistory,
+        );
 
         return aiMessage.content;
       }
 
       for (const toolCall of toolCalls) {
         const toolMessage = await executeToolCall(toolCall);
-
         messages.push(toolMessage);
       }
     }
@@ -92,8 +74,21 @@ export async function runAgent({
   } catch (error) {
     console.error('[agent] Execution failed:', error);
 
-    await saveHistorySafely(whatsappId, messages);
+    if (Array.isArray(messages) && messages.length > 0) {
+      try {
+        const updatedHistory = pruneHistory(
+          messages.map(toStoredMessage),
+        );
 
-    return FALLBACK_MESSAGE;
+        await saveConversationHistory(whatsappId, updatedHistory);
+      } catch (saveError) {
+        console.error(
+          '[agent] Failed to save conversation history after an error:',
+          saveError,
+        );
+      }
+    }
+
+    return 'Sorry, I could not process your request right now. Please try again shortly.';
   }
 }

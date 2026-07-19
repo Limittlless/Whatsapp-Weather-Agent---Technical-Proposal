@@ -33,19 +33,24 @@ function pruneWithoutLeadingSystemMessage(history, maxMessages) {
   if (history.length <= maxMessages) {
     return history;
   }
+
   const naiveStart = history.length - maxMessages;
   const units = groupIntoUnits(history);
   let safeStart = naiveStart;
   let index = 0;
+
   for (const unit of units) {
     const unitStart = index;
     const unitEnd = index + unit.length;
+
     if (naiveStart > unitStart && naiveStart < unitEnd) {
       safeStart = unitStart;
       break;
     }
+
     index = unitEnd;
   }
+
   return history.slice(safeStart);
 }
 
