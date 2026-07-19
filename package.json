@@ -23,6 +23,7 @@
   "license": "ISC",
   "dependencies": {
     "@langchain/core": "^1.2.3",
+    "@langchain/google": "^0.2.1",
     "@supabase/supabase-js": "^2.110.7",
     "dotenv": "^17.4.2",
     "zod": "^4.4.3"
