@@ -45,13 +45,6 @@ function parseRawFunctionCallText(content) {
   return null;
 }
 
-function looksLikeLeakedInternalArtifact(content) {
-  return (
-    typeof content === 'string' &&
-    (content.includes('thoughtSignature') || content.includes('"functionCall"'))
-  );
-}
-
 export async function runAgent({
   whatsappId,
   userMessage,
@@ -117,21 +110,6 @@ export async function runAgent({
         );
 
         continue;
-      }
-
-      if (looksLikeLeakedInternalArtifact(aiMessage.content)) {
-        console.error(
-          '[agent] Blocked a leaked internal artifact from being sent to the user:',
-          aiMessage.content,
-        );
-
-        const updatedHistory = pruneHistory(
-          messages.map(toStoredMessage),
-        );
-
-        await saveConversationHistory(whatsappId, updatedHistory);
-
-        return 'Sorry, I could not process your request right now. Please try again shortly.';
       }
 
       messages.push(aiMessage);
