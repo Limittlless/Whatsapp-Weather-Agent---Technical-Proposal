@@ -42,6 +42,12 @@ describe('supabaseClient', () => {
     const { getSupabaseClient } = await import('../src/config/supabaseClient.js');
     expect(() => getSupabaseClient()).toThrow(/Missing Supabase configuration/);
   });
+  it('throws a clear error when SUPABASE_SERVICE_ROLE_KEY is present but empty', async () => {
+    process.env.SUPABASE_URL = 'https://example.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = '';
+    const { getSupabaseClient } = await import('../src/config/supabaseClient.js');
+    expect(() => getSupabaseClient()).toThrow(/Missing Supabase configuration/);
+  });
   it('creates a client successfully when both env vars are present', async () => {
     process.env.SUPABASE_URL = 'https://example.supabase.co';
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-key';
