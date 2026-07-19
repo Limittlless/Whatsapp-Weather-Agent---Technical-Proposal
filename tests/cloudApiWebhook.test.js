@@ -1,14 +1,33 @@
+import crypto from 'node:crypto';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createCloudApiWebhookRouter } from '../src/gateways/cloudApiWebhook.js';
 
-function buildTestApp({ runAgentFn, sendMessageFn, verifyToken = 'test-verify-token' }) {
+function buildTestApp({
+  runAgentFn,
+  sendMessageFn,
+  claimMessageFn,
+  appSecret,
+  verifyToken = 'test-verify-token',
+}) {
   const app = express();
-  app.use(express.json());
+  app.use(
+    express.json({
+      verify: (req, _res, buf) => {
+        req.rawBody = buf;
+      },
+    })
+  );
   app.use(
     '/webhook',
-    createCloudApiWebhookRouter({ verifyToken, runAgentFn, sendMessageFn })
+    createCloudApiWebhookRouter({
+      verifyToken,
+      runAgentFn,
+      sendMessageFn,
+      claimMessageFn,
+      appSecret,
+    })
   );
   return app;
 }
@@ -219,6 +238,85 @@ describe('createCloudApiWebhookRouter', () => {
 
       const response = await request(app).post('/webhook').send(payload);
       await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(response.status).toBe(200);
+    });
+
+    it('skips the agent when claimMessageFn reports a duplicate', async () => {
+      const runAgentFn = vi.fn();
+      const sendMessageFn = vi.fn();
+      const claimMessageFn = vi.fn().mockResolvedValue(false);
+      const app = buildTestApp({ runAgentFn, sendMessageFn, claimMessageFn });
+
+      const payload = {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  messages: [
+                    {
+                      id: 'wamid.duplicate',
+                      from: '212600000000',
+                      type: 'text',
+                      text: { body: 'Hi again' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      await request(app).post('/webhook').send(payload);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(claimMessageFn).toHaveBeenCalledWith(
+        'wamid.duplicate',
+        '212600000000'
+      );
+      expect(runAgentFn).not.toHaveBeenCalled();
+      expect(sendMessageFn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('signature verification', () => {
+    it('rejects a POST with an invalid signature when appSecret is set', async () => {
+      const runAgentFn = vi.fn();
+      const sendMessageFn = vi.fn();
+      const app = buildTestApp({
+        runAgentFn,
+        sendMessageFn,
+        appSecret: 'test-app-secret',
+      });
+
+      const response = await request(app)
+        .post('/webhook')
+        .set('X-Hub-Signature-256', 'sha256=not-a-real-signature')
+        .send({ entry: [] });
+
+      expect(response.status).toBe(401);
+      expect(runAgentFn).not.toHaveBeenCalled();
+    });
+
+    it('accepts a POST with a correctly signed body', async () => {
+      const runAgentFn = vi.fn().mockResolvedValue('Sunny today.');
+      const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+      const appSecret = 'test-app-secret';
+      const app = buildTestApp({ runAgentFn, sendMessageFn, appSecret });
+
+      const payload = { entry: [] };
+      const rawBody = Buffer.from(JSON.stringify(payload));
+      const signature =
+        'sha256=' +
+        crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+
+      const response = await request(app)
+        .post('/webhook')
+        .set('X-Hub-Signature-256', signature)
+        .set('Content-Type', 'application/json')
+        .send(rawBody);
 
       expect(response.status).toBe(200);
     });

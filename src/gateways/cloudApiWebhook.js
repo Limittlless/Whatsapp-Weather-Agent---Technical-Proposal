@@ -1,10 +1,14 @@
 import { Router } from 'express';
 import { runAgent as defaultRunAgent } from '../agent/runAgent.js';
+import { claimMessage as defaultClaimMessage } from '../services/processedMessages.js';
+import { createMetaSignatureVerifier } from '../middleware/verifyMetaSignature.js';
 
 export function createCloudApiWebhookRouter({
   verifyToken,
   runAgentFn = defaultRunAgent,
   sendMessageFn,
+  claimMessageFn = defaultClaimMessage,
+  appSecret,
 } = {}) {
   if (!verifyToken?.trim()) {
     throw new Error(
@@ -19,6 +23,7 @@ export function createCloudApiWebhookRouter({
   }
 
   const router = Router();
+  const verifyMetaSignature = createMetaSignatureVerifier(appSecret);
 
   router.get('/', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -33,7 +38,7 @@ export function createCloudApiWebhookRouter({
     res.sendStatus(403);
   });
 
-  router.post('/', async (req, res) => {
+  router.post('/', verifyMetaSignature, async (req, res) => {
     res.sendStatus(200);
 
     const entries = req.body?.entry ?? [];
@@ -45,7 +50,11 @@ export function createCloudApiWebhookRouter({
         const messages = change?.value?.messages ?? [];
 
         for (const message of messages) {
-          await handleIncomingMessage(message, { runAgentFn, sendMessageFn });
+          await handleIncomingMessage(message, {
+            runAgentFn,
+            sendMessageFn,
+            claimMessageFn,
+          });
         }
       }
     }
@@ -54,19 +63,30 @@ export function createCloudApiWebhookRouter({
   return router;
 }
 
-async function handleIncomingMessage(message, { runAgentFn, sendMessageFn }) {
+async function handleIncomingMessage(
+  message,
+  { runAgentFn, sendMessageFn, claimMessageFn }
+) {
   if (message?.type !== 'text') {
     return;
   }
 
   const whatsappId = message.from;
   const userMessage = message.text?.body;
+  const messageId = message.id;
 
   if (!whatsappId || !userMessage?.trim()) {
     return;
   }
 
   try {
+    const shouldProcess = await claimMessageFn(messageId, whatsappId);
+
+    if (!shouldProcess) {
+      console.log(`[webhook] Skipping already-processed message ${messageId}`);
+      return;
+    }
+
     const reply = await runAgentFn({ whatsappId, userMessage });
     await sendMessageFn(whatsappId, reply);
   } catch (error) {
