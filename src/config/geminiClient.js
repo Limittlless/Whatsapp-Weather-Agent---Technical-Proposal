@@ -21,7 +21,7 @@ export function createGeminiModel() {
     model: modelName,
     apiKey,
     reasoningEffort: 'low',
-    maxOutputTokens: 300,
+    maxOutputTokens: 1024,
     maxRetries: 1,
   });
 
