@@ -109,6 +109,7 @@ describe('pruneHistory', () => {
 
     expect(result[0]).toEqual(systemMsg);
     expect(result.filter((m) => m.role === 'system')).toHaveLength(1);
+    // Budget for the rest is maxMessages - 1 (one slot reserved for system).
     expect(result.length).toBe(20);
   });
 
