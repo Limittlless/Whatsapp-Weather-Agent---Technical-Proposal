@@ -25,6 +25,7 @@ export function getSupabaseClient() {
   }
   return cachedClient;
 }
+
 export async function verifySupabaseConnection() {
   const supabase = getSupabaseClient();
   const { error } = await supabase
@@ -35,6 +36,7 @@ export async function verifySupabaseConnection() {
   }
   return true;
 }
+
 export function __resetClientForTests() {
   cachedClient = null;
 }

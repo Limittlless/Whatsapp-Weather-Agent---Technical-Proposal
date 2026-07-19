@@ -7,7 +7,6 @@ describe('geocodeCity', () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
-
   it('returns validated coordinates for a valid city', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
@@ -24,9 +23,7 @@ describe('geocodeCity', () => {
         ],
       }),
     });
-
     const result = await geocodeCity('Marrakesh');
-
     expect(result).toEqual({
       cityName: 'Marrakesh',
       latitude: 31.63416,
@@ -35,7 +32,6 @@ describe('geocodeCity', () => {
       timezone: 'Africa/Casablanca',
     });
   });
-
   it('trims the city name before sending the request', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
@@ -50,20 +46,15 @@ describe('geocodeCity', () => {
         ],
       }),
     });
-
     await geocodeCity('  Cairo  ');
-
     const requestedUrl = fetchMock.mock.calls[0][0];
-
     expect(requestedUrl.searchParams.get('name')).toBe('Cairo');
   });
-
   it('throws when the city name is empty', async () => {
     await expect(geocodeCity('   ')).rejects.toThrow(
       'City name is required.'
     );
   });
-
   it('throws when no location is found', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
@@ -72,12 +63,10 @@ describe('geocodeCity', () => {
         results: [],
       }),
     });
-
     await expect(geocodeCity('UnknownCity')).rejects.toThrow(
       'No location found'
     );
   });
-
   it('throws when coordinates are not numbers', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
@@ -92,12 +81,10 @@ describe('geocodeCity', () => {
         ],
       }),
     });
-
     await expect(geocodeCity('Cairo')).rejects.toThrow(
       'invalid location data or coordinates'
     );
   });
-
   it('throws when coordinates are outside valid ranges', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
@@ -112,33 +99,27 @@ describe('geocodeCity', () => {
         ],
       }),
     });
-
     await expect(geocodeCity('Invalid City')).rejects.toThrow(
       'invalid location data or coordinates'
     );
   });
-
   it('throws when the API returns an unsuccessful response', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: false,
       status: 500,
     });
-
     await expect(geocodeCity('Cairo')).rejects.toThrow(
       'Geocoding request failed with status 500.'
     );
   });
-
   it('throws when the network request fails', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(
       new Error('Network unavailable')
     );
-
     await expect(geocodeCity('Cairo')).rejects.toThrow(
       'Failed to reach the geocoding service: Network unavailable'
     );
   });
-
   it('throws when the response contains invalid JSON', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
@@ -147,15 +128,12 @@ describe('geocodeCity', () => {
         throw new SyntaxError('Unexpected token');
       },
     });
-
     await expect(geocodeCity('Cairo')).rejects.toThrow(
       'The geocoding service returned an invalid JSON response.'
     );
   });
-
   it('aborts the request when it exceeds the timeout', async () => {
     vi.useFakeTimers();
-
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       (_url, { signal }) =>
         new Promise((_resolve, reject) => {
@@ -166,13 +144,10 @@ describe('geocodeCity', () => {
           });
         })
     );
-
     const requestPromise = geocodeCity('Cairo');
-
     const rejectionExpectation = expect(requestPromise).rejects.toThrow(
       'Geocoding request timed out after 5000ms.'
     );
-
     await vi.advanceTimersByTimeAsync(5000);
     await rejectionExpectation;
   });

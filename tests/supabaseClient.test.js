@@ -1,13 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
+vi.mock('dotenv/config', () => ({}));
+
 const { mockFrom, mockSelect } = vi.hoisted(() => {
   const mockSelect = vi.fn();
   const mockFrom = vi.fn(() => ({ select: mockSelect }));
   return { mockFrom, mockSelect };
 });
+
 vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(() => ({ from: mockFrom })),
 }));
+
 const ORIGINAL_ENV = { ...process.env };
 
 describe('supabaseClient', () => {
@@ -32,6 +36,18 @@ describe('supabaseClient', () => {
     const { getSupabaseClient } = await import('../src/config/supabaseClient.js');
     expect(() => getSupabaseClient()).toThrow(/Missing Supabase configuration/);
   });
+  it('throws a clear error when SUPABASE_URL is present but empty', async () => {
+    process.env.SUPABASE_URL = '';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-key';
+    const { getSupabaseClient } = await import('../src/config/supabaseClient.js');
+    expect(() => getSupabaseClient()).toThrow(/Missing Supabase configuration/);
+  });
+  it('throws a clear error when SUPABASE_SERVICE_ROLE_KEY is present but empty', async () => {
+    process.env.SUPABASE_URL = 'https://example.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = '';
+    const { getSupabaseClient } = await import('../src/config/supabaseClient.js');
+    expect(() => getSupabaseClient()).toThrow(/Missing Supabase configuration/);
+  });
   it('creates a client successfully when both env vars are present', async () => {
     process.env.SUPABASE_URL = 'https://example.supabase.co';
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-key';
@@ -49,7 +65,6 @@ describe('supabaseClient', () => {
     expect(clientA).toBe(clientB);
   });
 });
-
 describe('verifySupabaseConnection', () => {
   beforeEach(() => {
     vi.resetModules();
