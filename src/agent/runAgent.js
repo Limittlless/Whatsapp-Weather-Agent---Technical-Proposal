@@ -6,6 +6,7 @@ import {
   saveConversationHistory,
 } from '../services/conversationStore.js';
 import { pruneHistory } from '../services/pruneHistory.js';
+import { recordGeminiCall } from '../services/usageMetrics.js';
 
 import { prepareConversationHistory } from './conversationContext.js';
 import { executeToolCall } from './executeToolCall.js';
@@ -101,7 +102,16 @@ export async function runAgent({
       iteration < MAX_ITERATIONS;
       iteration += 1
     ) {
-      const aiMessage = await activeModel.invoke(messages);
+      const aiMessage = await activeModel
+        .invoke(messages)
+        .then((result) => {
+          recordGeminiCall({ ok: true });
+          return result;
+        })
+        .catch((error) => {
+          recordGeminiCall({ ok: false, error });
+          throw error;
+        });
 
       const toolCalls = aiMessage.tool_calls ?? [];
 

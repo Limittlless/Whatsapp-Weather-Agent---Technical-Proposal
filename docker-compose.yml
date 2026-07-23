@@ -1,0 +1,10 @@
+services:
+  whatsapp-weather-agent:
+    build:
+      context: .
+    image: whatsapp-weather-agent:local
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    restart: unless-stopped

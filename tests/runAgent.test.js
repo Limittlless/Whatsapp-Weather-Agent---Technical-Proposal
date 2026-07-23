@@ -16,10 +16,15 @@ import {
 } from '../src/services/conversationStore.js';
 import { executeToolCall } from '../src/agent/executeToolCall.js';
 import { runAgent } from '../src/agent/runAgent.js';
+import {
+  getUsageSnapshot,
+  __resetUsageForTests,
+} from '../src/services/usageMetrics.js';
 
 describe('runAgent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetUsageForTests();
     getConversationHistory.mockResolvedValue([]);
     saveConversationHistory.mockResolvedValue(undefined);
   });
@@ -306,5 +311,73 @@ describe('runAgent', () => {
     expect(executeToolCall).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'geocode_location' }),
     );
+  });
+
+  it('records a successful Gemini call in usage metrics', async () => {
+    const model = {
+      invoke: vi.fn().mockResolvedValue(
+        new AIMessage({ content: 'Hello!' }),
+      ),
+    };
+
+    await runAgent({
+      whatsappId: '212600000000',
+      userMessage: 'Hello',
+      model,
+    });
+
+    const snapshot = getUsageSnapshot();
+    expect(snapshot.geminiCallsTotal).toBe(1);
+    expect(snapshot.geminiCallsOk).toBe(1);
+    expect(snapshot.geminiCallsFailed).toBe(0);
+  });
+
+  it('records each Gemini call across multiple tool-use iterations', async () => {
+    const firstResponse = new AIMessage({
+      content: '',
+      tool_calls: [
+        { id: 'call-1', name: 'geocode_location', args: { location: 'X' } },
+      ],
+    });
+    const finalResponse = new AIMessage({ content: 'Done.' });
+
+    const model = {
+      invoke: vi
+        .fn()
+        .mockResolvedValueOnce(firstResponse)
+        .mockResolvedValueOnce(finalResponse),
+    };
+
+    executeToolCall.mockResolvedValue({
+      getType: () => 'tool',
+      content: '{}',
+      tool_call_id: 'call-1',
+      name: 'geocode_location',
+    });
+
+    await runAgent({
+      whatsappId: '212600000000',
+      userMessage: 'Weather?',
+      model,
+    });
+
+    expect(getUsageSnapshot().geminiCallsTotal).toBe(2);
+  });
+
+  it('records a failed Gemini call in usage metrics', async () => {
+    const model = {
+      invoke: vi.fn().mockRejectedValue(new Error('Gemini service unavailable')),
+    };
+
+    await runAgent({
+      whatsappId: '212600000000',
+      userMessage: 'What is the weather?',
+      model,
+    });
+
+    const snapshot = getUsageSnapshot();
+    expect(snapshot.geminiCallsTotal).toBe(1);
+    expect(snapshot.geminiCallsFailed).toBe(1);
+    expect(snapshot.lastGeminiError.message).toBe('Gemini service unavailable');
   });
 });

@@ -2,6 +2,11 @@ import { Router } from 'express';
 import { runAgent as defaultRunAgent } from '../agent/runAgent.js';
 import { claimMessage as defaultClaimMessage } from '../services/processedMessages.js';
 import { createMetaSignatureVerifier } from '../middleware/verifyMetaSignature.js';
+import { isAdminNumber } from '../services/adminAuth.js';
+import {
+  isAdminCommandMessage,
+  executeAdminCommand,
+} from '../services/adminCommands.js';
 
 export function createCloudApiWebhookRouter({
   verifyToken,
@@ -84,6 +89,20 @@ async function handleIncomingMessage(
 
     if (!shouldProcess) {
       console.log(`[webhook] Skipping already-processed message ${messageId}`);
+      return;
+    }
+
+    if (isAdminCommandMessage(userMessage) && isAdminNumber(whatsappId)) {
+      try {
+        const reply = await executeAdminCommand(userMessage);
+        await sendMessageFn(whatsappId, reply);
+      } catch (error) {
+        console.error('[webhook] Admin command failed:', error);
+        await sendMessageFn(
+          whatsappId,
+          'حدث خطأ أثناء تنفيذ الأمر. حاول مرة أخرى.'
+        );
+      }
       return;
     }
 

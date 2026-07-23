@@ -321,4 +321,217 @@ describe('createCloudApiWebhookRouter', () => {
       expect(response.status).toBe(200);
     });
   });
+
+  describe('admin direct commands', () => {
+    const ORIGINAL_ADMIN_ENV = process.env.ADMIN_WHATSAPP_NUMBERS;
+
+    afterEach(() => {
+      if (ORIGINAL_ADMIN_ENV === undefined) {
+        delete process.env.ADMIN_WHATSAPP_NUMBERS;
+      } else {
+        process.env.ADMIN_WHATSAPP_NUMBERS = ORIGINAL_ADMIN_ENV;
+      }
+    });
+
+    it('runs a "/"-prefixed command directly for an admin number, without calling the agent', async () => {
+      process.env.ADMIN_WHATSAPP_NUMBERS = '212600000000';
+
+      const runAgentFn = vi.fn();
+      const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+      const claimMessageFn = vi.fn().mockResolvedValue(true);
+      const app = buildTestApp({ runAgentFn, sendMessageFn, claimMessageFn });
+
+      const payload = {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  messages: [
+                    {
+                      id: 'admin-cmd-1',
+                      from: '212600000000',
+                      type: 'text',
+                      text: { body: '/uptime' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      await request(app).post('/webhook').send(payload);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(runAgentFn).not.toHaveBeenCalled();
+      expect(sendMessageFn).toHaveBeenCalledTimes(1);
+      const [to, body] = sendMessageFn.mock.calls[0];
+      expect(to).toBe('212600000000');
+      expect(body).toContain('مدة تشغيل الخادم');
+    });
+
+    it('falls through to the normal agent for a "/"-prefixed message from a non-admin number', async () => {
+      process.env.ADMIN_WHATSAPP_NUMBERS = '212600000000';
+
+      const runAgentFn = vi.fn().mockResolvedValue('Just a normal reply');
+      const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+      const claimMessageFn = vi.fn().mockResolvedValue(true);
+      const app = buildTestApp({ runAgentFn, sendMessageFn, claimMessageFn });
+
+      const payload = {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  messages: [
+                    {
+                      id: 'not-admin-1',
+                      from: '212699999999',
+                      type: 'text',
+                      text: { body: '/uptime' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      await request(app).post('/webhook').send(payload);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(runAgentFn).toHaveBeenCalledWith({
+        whatsappId: '212699999999',
+        userMessage: '/uptime',
+      });
+      expect(sendMessageFn).toHaveBeenCalledWith(
+        '212699999999',
+        'Just a normal reply'
+      );
+    });
+
+    it('falls through to the normal agent for a non-"/" message from an admin number', async () => {
+      process.env.ADMIN_WHATSAPP_NUMBERS = '212600000000';
+
+      const runAgentFn = vi.fn().mockResolvedValue('Weather reply');
+      const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+      const claimMessageFn = vi.fn().mockResolvedValue(true);
+      const app = buildTestApp({ runAgentFn, sendMessageFn, claimMessageFn });
+
+      const payload = {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  messages: [
+                    {
+                      id: 'admin-normal-1',
+                      from: '212600000000',
+                      type: 'text',
+                      text: { body: 'What is the weather in Rabat?' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      await request(app).post('/webhook').send(payload);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(runAgentFn).toHaveBeenCalledWith({
+        whatsappId: '212600000000',
+        userMessage: 'What is the weather in Rabat?',
+      });
+      expect(sendMessageFn).toHaveBeenCalledWith(
+        '212600000000',
+        'Weather reply'
+      );
+    });
+
+    it('supports multiple admin numbers', async () => {
+      process.env.ADMIN_WHATSAPP_NUMBERS = '212600000000,212611111111';
+
+      const runAgentFn = vi.fn();
+      const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+      const claimMessageFn = vi.fn().mockResolvedValue(true);
+      const app = buildTestApp({ runAgentFn, sendMessageFn, claimMessageFn });
+
+      const payload = {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  messages: [
+                    {
+                      id: 'admin-cmd-2',
+                      from: '212611111111',
+                      type: 'text',
+                      text: { body: '/help' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      await request(app).post('/webhook').send(payload);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(runAgentFn).not.toHaveBeenCalled();
+      expect(sendMessageFn).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not run admin commands at all when ADMIN_WHATSAPP_NUMBERS is unset', async () => {
+      delete process.env.ADMIN_WHATSAPP_NUMBERS;
+
+      const runAgentFn = vi.fn().mockResolvedValue('Normal reply');
+      const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+      const claimMessageFn = vi.fn().mockResolvedValue(true);
+      const app = buildTestApp({ runAgentFn, sendMessageFn, claimMessageFn });
+
+      const payload = {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  messages: [
+                    {
+                      id: 'no-admins-1',
+                      from: '212600000000',
+                      type: 'text',
+                      text: { body: '/status' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      await request(app).post('/webhook').send(payload);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(runAgentFn).toHaveBeenCalledWith({
+        whatsappId: '212600000000',
+        userMessage: '/status',
+      });
+      expect(sendMessageFn).toHaveBeenCalledWith(
+        '212600000000',
+        'Normal reply'
+      );
+    });
+  });
 });
