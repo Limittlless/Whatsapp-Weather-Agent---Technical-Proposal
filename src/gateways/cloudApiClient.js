@@ -1,3 +1,6 @@
+import { withRetry } from '../lib/retry.js';
+import { trackError } from '../services/errorTracker.js';
+
 const GRAPH_API_VERSION = 'v23.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 const REQUEST_TIMEOUT_MS = 8000;
@@ -14,7 +17,21 @@ export function createCloudApiSender({ phoneNumberId, accessToken }) {
     throw new Error('accessToken is required to send WhatsApp messages.');
   }
 
-  async function sendMessage(to, body) {
+  function buildSafeBody(body) {
+    if (body.length <= WHATSAPP_TEXT_LIMIT) {
+      return body;
+    }
+
+    console.error(
+      `[cloudApiClient] Message body is ${body.length} chars, over ` +
+        `WhatsApp's ${WHATSAPP_TEXT_LIMIT}-char limit. Truncating ` +
+        'instead of letting the send fail outright — this should ' +
+        'be investigated upstream (see the agent-side reply guard).',
+    );
+    return `${body.slice(0, WHATSAPP_TEXT_LIMIT - 1)}…`;
+  }
+
+  async function rawSend(to, body) {
     if (!to?.trim()) {
       throw new Error('A recipient WhatsApp ID is required.');
     }
@@ -23,18 +40,7 @@ export function createCloudApiSender({ phoneNumberId, accessToken }) {
       throw new Error('A non-empty message body is required.');
     }
 
-    let safeBody = body;
-
-    if (body.length > WHATSAPP_TEXT_LIMIT) {
-      console.error(
-        `[cloudApiClient] Message body is ${body.length} chars, over ` +
-          `WhatsApp's ${WHATSAPP_TEXT_LIMIT}-char limit. Truncating ` +
-          'instead of letting the send fail outright — this should ' +
-          'be investigated upstream (see the agent-side reply guard).',
-      );
-      safeBody = `${body.slice(0, WHATSAPP_TEXT_LIMIT - 1)}…`;
-    }
-
+    const safeBody = buildSafeBody(body);
     const url = `${GRAPH_API_BASE}/${phoneNumberId}/messages`;
 
     const controller = new AbortController();
@@ -79,12 +85,46 @@ export function createCloudApiSender({ phoneNumberId, accessToken }) {
 
     if (!response.ok) {
       const errorBody = await response.text().catch(() => '');
-      throw new Error(
+      const httpError = new Error(
         `WhatsApp Cloud API request failed with status ${response.status}: ${errorBody}`
       );
+      httpError.status = response.status;
+      throw httpError;
     }
 
     return response.json();
+  }
+
+  async function sendMessage(to, body) {
+    let attemptsMade = 0;
+
+    try {
+      return await withRetry(
+        () => {
+          attemptsMade += 1;
+          return rawSend(to, body);
+        },
+        {
+          onRetry: ({ error, willRetry }) => {
+            if (willRetry) {
+              console.warn(
+                `[cloudApiClient] Send attempt ${attemptsMade} failed, retrying:`,
+                error instanceof Error ? error.message : error,
+              );
+            }
+          },
+        },
+      );
+    } catch (error) {
+      trackError({
+        service: 'whatsapp',
+        severity: 'critical',
+        error,
+        retryCount: attemptsMade - 1,
+        context: { to },
+      });
+      throw error;
+    }
   }
 
   async function sendTypingIndicator(messageId) {
@@ -132,6 +172,7 @@ export function createCloudApiSender({ phoneNumberId, accessToken }) {
   }
 
   sendMessage.sendTypingIndicator = sendTypingIndicator;
+  sendMessage.rawSend = rawSend;
 
   return sendMessage;
 }

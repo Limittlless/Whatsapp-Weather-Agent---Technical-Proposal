@@ -103,6 +103,7 @@ describe('adminCommands', () => {
       expect(reply).toContain('إجمالي الاستدعاءات: 3');
       expect(reply).toContain('ناجحة: 2');
       expect(reply).toContain('فاشلة: 1');
+
       expect(reply).toMatch(/لا يوفّر رقمًا رسميًا/);
     });
 

@@ -7,6 +7,7 @@ import rateLimit from 'express-rate-limit';
 
 import { createCloudApiWebhookRouter } from './gateways/cloudApiWebhook.js';
 import { createCloudApiSender } from './gateways/cloudApiClient.js';
+import { configureErrorTracker } from './services/errorTracker.js';
 
 const PORT = process.env.PORT || 3000;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
@@ -25,6 +26,11 @@ function buildApp() {
   const sendMessage = createCloudApiSender({
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
     accessToken: process.env.WHATSAPP_CLOUD_API_TOKEN,
+  });
+
+  configureErrorTracker({
+    sendAlertFn: sendMessage.rawSend,
+    adminNumber: process.env.ADMIN_ALERT_WHATSAPP_NUMBER,
   });
 
   const webhookRouter = createCloudApiWebhookRouter({

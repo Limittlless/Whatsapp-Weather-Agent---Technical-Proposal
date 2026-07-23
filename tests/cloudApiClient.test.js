@@ -104,7 +104,7 @@ describe('createCloudApiSender', () => {
     );
   });
 
-  it('aborts the request when it exceeds the timeout', async () => {
+  it('aborts the request when it exceeds the timeout, after exhausting retries', async () => {
     vi.useFakeTimers();
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(
@@ -128,7 +128,57 @@ describe('createCloudApiSender', () => {
       'timed out after 8000ms'
     );
 
-    await vi.advanceTimersByTimeAsync(8000);
+    for (let i = 0; i < 3; i += 1) {
+      await vi.advanceTimersByTimeAsync(8000);
+      await vi.advanceTimersByTimeAsync(5000);
+    }
+
     await rejectionExpectation;
+  });
+
+  it('exposes rawSend as a single-attempt sender with no retry', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 503,
+      text: async () => 'temporarily unavailable',
+    });
+
+    const sendMessage = createCloudApiSender({
+      phoneNumberId: '123',
+      accessToken: 'token',
+    });
+
+    expect(typeof sendMessage.rawSend).toBe('function');
+
+    await expect(
+      sendMessage.rawSend('212600000000', 'Hi'),
+    ).rejects.toThrow('WhatsApp Cloud API request failed with status 503');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a transient (5xx) failure via sendMessage and eventually succeeds', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        text: async () => 'temporarily unavailable',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ messages: [{ id: 'wamid.456' }] }),
+      });
+
+    const sendMessage = createCloudApiSender({
+      phoneNumberId: '123',
+      accessToken: 'token',
+    });
+
+    const result = await sendMessage('212600000000', 'Hi');
+
+    expect(result).toEqual({ messages: [{ id: 'wamid.456' }] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

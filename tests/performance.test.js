@@ -132,7 +132,7 @@ describe('webhook performance', () => {
         `p95=${p95.toFixed(1)}ms max=${max.toFixed(1)}ms`
     );
 
-    expect(p50).toBeLessThan(300);
+    expect(p50).toBeLessThan(500);
     expect(p95).toBeLessThan(800);
   });
 

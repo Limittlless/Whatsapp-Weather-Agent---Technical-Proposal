@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { getSupabaseClient } from '../config/supabaseClient.js';
+import { getSupabaseClient, withSupabaseRetry } from '../config/supabaseClient.js';
 
 const messageSchema = z
   .object({
@@ -22,14 +22,17 @@ function assertWhatsappId(whatsappId) {
 export async function getConversationHistory(whatsappId) {
   assertWhatsappId(whatsappId);
   const supabase = getSupabaseClient();
-  const { data, error } = await supabase
-    .from('conversations')
-    .select('history')
-    .eq('whatsapp_id', whatsappId)
-    .maybeSingle();
-  if (error) {
-    throw new Error(`Failed to load conversation history: ${error.message}`);
-  }
+
+  const { data } = await withSupabaseRetry(
+    () =>
+      supabase
+        .from('conversations')
+        .select('history')
+        .eq('whatsapp_id', whatsappId)
+        .maybeSingle(),
+    { operation: 'getConversationHistory', context: { whatsappId } },
+  );
+
   if (!data) {
     return [];
   }
@@ -49,14 +52,17 @@ export async function saveConversationHistory(whatsappId, history) {
     throw new Error('Cannot save malformed conversation history.');
   }
   const supabase = getSupabaseClient();
-  const { error } = await supabase
-    .from('conversations')
-    .upsert(
-      { whatsapp_id: whatsappId, history: validation.data },
-      { onConflict: 'whatsapp_id' }
-    );
-  if (error) {
-    throw new Error(`Failed to save conversation history: ${error.message}`);
-  }
+
+  await withSupabaseRetry(
+    () =>
+      supabase
+        .from('conversations')
+        .upsert(
+          { whatsapp_id: whatsappId, history: validation.data },
+          { onConflict: 'whatsapp_id' }
+        ),
+    { operation: 'saveConversationHistory', context: { whatsappId } },
+  );
+
   return true;
 }

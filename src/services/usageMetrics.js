@@ -4,7 +4,7 @@ const state = {
   geminiCallsTotal: 0,
   geminiCallsOk: 0,
   geminiCallsFailed: 0,
-  lastGeminiError: null, 
+  lastGeminiError: null,
   lastGeminiCallAt: null,
   callTimestamps: [],
 };

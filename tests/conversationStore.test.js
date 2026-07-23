@@ -14,6 +14,25 @@ const { mockFrom, mockSelect, mockEq, mockMaybeSingle, mockUpsert } =
   });
 vi.mock('../src/config/supabaseClient.js', () => ({
   getSupabaseClient: () => ({ from: mockFrom }),
+  withSupabaseRetry: async (queryFn, { operation } = {}) => {
+    let lastError;
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await queryFn();
+      if (!result?.error) {
+        return result;
+      }
+
+      lastError = result.error;
+      if (result.error.code !== '40P01') {
+        break;
+      }
+    }
+
+    throw new Error(
+      `Supabase operation "${operation}" failed: ${lastError.message}`
+    );
+  },
 }));
 
 const ORIGINAL_ENV = { ...process.env };
@@ -74,7 +93,7 @@ describe('conversationStore', () => {
         '../src/services/conversationStore.js'
       );
       await expect(getConversationHistory('9715551234')).rejects.toThrow(
-        'Failed to load conversation history: connection refused'
+        'Supabase operation "getConversationHistory" failed: connection refused'
       );
     });
     it('throws when the stored history fails schema validation', async () => {
@@ -88,6 +107,23 @@ describe('conversationStore', () => {
       await expect(getConversationHistory('9715551234')).rejects.toThrow(
         'malformed'
       );
+    });
+    it('retries a transient (deadlock) read failure and succeeds', async () => {
+      mockMaybeSingle
+        .mockResolvedValueOnce({
+          data: null,
+          error: { code: '40P01', message: 'deadlock detected' },
+        })
+        .mockResolvedValueOnce({
+          data: { history: [{ role: 'user', content: 'hi' }] },
+          error: null,
+        });
+      const { getConversationHistory } = await import(
+        '../src/services/conversationStore.js'
+      );
+      const result = await getConversationHistory('9715551234');
+      expect(result).toEqual([{ role: 'user', content: 'hi' }]);
+      expect(mockMaybeSingle).toHaveBeenCalledTimes(2);
     });
   });
   describe('saveConversationHistory', () => {
@@ -131,7 +167,9 @@ describe('conversationStore', () => {
         saveConversationHistory('9715551234', [
           { role: 'user', content: 'Hello' },
         ])
-      ).rejects.toThrow('Failed to save conversation history: row too large');
+      ).rejects.toThrow(
+        'Supabase operation "saveConversationHistory" failed: row too large'
+      );
     });
   });
 });

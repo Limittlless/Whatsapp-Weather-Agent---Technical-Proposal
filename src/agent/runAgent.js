@@ -1,10 +1,12 @@
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 
 import { createGeminiModel } from '../config/geminiClient.js';
+import { withRetry, defaultIsRetryable } from '../lib/retry.js';
 import {
   getConversationHistory,
   saveConversationHistory,
 } from '../services/conversationStore.js';
+import { trackError } from '../services/errorTracker.js';
 import { pruneHistory } from '../services/pruneHistory.js';
 import { recordGeminiCall } from '../services/usageMetrics.js';
 
@@ -16,8 +18,19 @@ import {
 } from './messageMapper.js';
 
 const MAX_ITERATIONS = 5;
-const WHATSAPP_TEXT_LIMIT = 4096;
 const SUSPICIOUSLY_LONG_REPLY_LENGTH = 3500;
+
+const GEMINI_MAX_ATTEMPTS = 3;
+const GEMINI_BASE_DELAY_MS = 300;
+const GEMINI_MAX_DELAY_MS = 5000;
+
+function isGeminiErrorRetryable(error) {
+  if (typeof error?.code === 'number') {
+    return [408, 429, 500, 502, 503, 504].includes(error.code);
+  }
+
+  return defaultIsRetryable(error);
+}
 
 function parseRawFunctionCallText(content) {
   if (typeof content !== 'string') {
@@ -102,14 +115,41 @@ export async function runAgent({
       iteration < MAX_ITERATIONS;
       iteration += 1
     ) {
-      const aiMessage = await activeModel
-        .invoke(messages)
+      let attemptsMade = 0;
+
+      const aiMessage = await withRetry(
+        () => {
+          attemptsMade += 1;
+          return activeModel.invoke(messages);
+        },
+        {
+          maxAttempts: GEMINI_MAX_ATTEMPTS,
+          baseDelayMs: GEMINI_BASE_DELAY_MS,
+          maxDelayMs: GEMINI_MAX_DELAY_MS,
+          isRetryable: isGeminiErrorRetryable,
+          onRetry: ({ error, willRetry }) => {
+            if (willRetry) {
+              console.warn(
+                `[agent] Gemini call failed (attempt ${attemptsMade}), retrying:`,
+                error instanceof Error ? error.message : error,
+              );
+            }
+          },
+        },
+      )
         .then((result) => {
           recordGeminiCall({ ok: true });
           return result;
         })
         .catch((error) => {
           recordGeminiCall({ ok: false, error });
+          trackError({
+            service: 'gemini',
+            severity: 'warning',
+            error,
+            retryCount: attemptsMade - 1,
+            context: { whatsappId },
+          });
           throw error;
         });
 
@@ -199,6 +239,13 @@ export async function runAgent({
     );
   } catch (error) {
     console.error('[agent] Execution failed:', error);
+
+    trackError({
+      service: 'agent',
+      severity: 'critical',
+      error,
+      context: { whatsappId },
+    });
 
     if (Array.isArray(messages) && messages.length > 0) {
       try {

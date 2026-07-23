@@ -380,4 +380,61 @@ describe('runAgent', () => {
     expect(snapshot.geminiCallsFailed).toBe(1);
     expect(snapshot.lastGeminiError.message).toBe('Gemini service unavailable');
   });
+
+  describe('Gemini retry behavior', () => {
+    it('does not retry a non-retryable Gemini error (fails on first attempt)', async () => {
+      const model = {
+        invoke: vi.fn().mockRejectedValue(new Error('Gemini service unavailable')),
+      };
+
+      await runAgent({
+        whatsappId: '212600000000',
+        userMessage: 'What is the weather?',
+        model,
+      });
+
+      expect(model.invoke).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries a retryable Gemini error and succeeds on a later attempt', async () => {
+      const retryableError = new Error('rate limit exceeded, please retry');
+      retryableError.code = 429;
+
+      const model = {
+        invoke: vi
+          .fn()
+          .mockRejectedValueOnce(retryableError)
+          .mockResolvedValueOnce(new AIMessage({ content: 'Recovered!' })),
+      };
+
+      const result = await runAgent({
+        whatsappId: '212600000000',
+        userMessage: 'What is the weather?',
+        model,
+      });
+
+      expect(result).toBe('Recovered!');
+      expect(model.invoke).toHaveBeenCalledTimes(2);
+    });
+
+    it('gives up after exhausting retries on a persistently retryable error', async () => {
+      const retryableError = new Error('temporarily unavailable');
+      retryableError.code = 503;
+
+      const model = {
+        invoke: vi.fn().mockRejectedValue(retryableError),
+      };
+
+      const result = await runAgent({
+        whatsappId: '212600000000',
+        userMessage: 'What is the weather?',
+        model,
+      });
+
+      expect(result).toBe(
+        'Sorry, I could not process your request right now. Please try again shortly.',
+      );
+      expect(model.invoke).toHaveBeenCalledTimes(3);
+    }, 10_000);
+  });
 });

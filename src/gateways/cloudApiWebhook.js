@@ -43,29 +43,43 @@ export function createCloudApiWebhookRouter({
     res.sendStatus(403);
   });
 
-  router.post('/', verifyMetaSignature, async (req, res) => {
+  router.post('/', verifyMetaSignature, (req, res) => {
+    const entries = req.body?.entry ?? [];
     res.sendStatus(200);
 
-    const entries = req.body?.entry ?? [];
-
-    for (const entry of entries) {
-      const changes = entry?.changes ?? [];
-
-      for (const change of changes) {
-        const messages = change?.value?.messages ?? [];
-
-        for (const message of messages) {
-          await handleIncomingMessage(message, {
-            runAgentFn,
-            sendMessageFn,
-            claimMessageFn,
-          });
-        }
-      }
-    }
+    setTimeout(() => {
+      processIncomingEntries(entries, {
+        runAgentFn,
+        sendMessageFn,
+        claimMessageFn,
+      }).catch((error) => {
+        console.error('[webhook] Failed to process webhook payload:', error);
+      });
+    }, 0);
   });
 
   return router;
+}
+
+async function processIncomingEntries(
+  entries,
+  { runAgentFn, sendMessageFn, claimMessageFn }
+) {
+  for (const entry of entries) {
+    const changes = entry?.changes ?? [];
+
+    for (const change of changes) {
+      const messages = change?.value?.messages ?? [];
+
+      for (const message of messages) {
+        await handleIncomingMessage(message, {
+          runAgentFn,
+          sendMessageFn,
+          claimMessageFn,
+        });
+      }
+    }
+  }
 }
 
 async function handleIncomingMessage(

@@ -93,7 +93,7 @@ describe('usageMetrics', () => {
 
     recordGeminiCall({ ok: true });
 
-    vi.setSystemTime(new Date('2026-01-02T01:00:00Z')); 
+    vi.setSystemTime(new Date('2026-01-02T01:00:00Z'));
 
     const snapshot = getUsageSnapshot();
 
@@ -108,7 +108,7 @@ describe('usageMetrics', () => {
 
     recordGeminiCall({ ok: true });
 
-    vi.setSystemTime(new Date('2026-01-01T00:02:00Z')); 
+    vi.setSystemTime(new Date('2026-01-01T00:02:00Z'));
 
     const snapshot = getUsageSnapshot();
 
