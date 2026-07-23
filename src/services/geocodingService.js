@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+import { withRetry } from '../lib/retry.js';
+import { trackError } from './errorTracker.js';
+
 const GEOCODING_BASE_URL =
   'https://geocoding-api.open-meteo.com/v1/search';
 
@@ -16,11 +19,8 @@ const locationSchema = z.object({
 const geocodingResponseSchema = z.object({
   results: z.array(z.unknown()).optional(),
 });
-export async function geocodeCity(cityName) {
-  const normalizedCityName = cityName?.trim();
-  if (!normalizedCityName) {
-    throw new Error('City name is required.');
-  }
+
+async function fetchGeocodeOnce(normalizedCityName) {
   const url = new URL(GEOCODING_BASE_URL);
   url.searchParams.set('name', normalizedCityName);
   url.searchParams.set('count', '1');
@@ -52,9 +52,11 @@ export async function geocodeCity(cityName) {
     clearTimeout(timeoutId);
   }
   if (!response.ok) {
-    throw new Error(
+    const statusError = new Error(
       `Geocoding request failed with status ${response.status}.`
     );
+    statusError.status = response.status;
+    throw statusError;
   }
   let rawData;
   try {
@@ -88,4 +90,41 @@ export async function geocodeCity(cityName) {
     country: location.country ?? null,
     timezone: location.timezone ?? null,
   };
+}
+
+export async function geocodeCity(cityName) {
+  const normalizedCityName = cityName?.trim();
+  if (!normalizedCityName) {
+    throw new Error('City name is required.');
+  }
+
+  let attemptsMade = 0;
+
+  try {
+    return await withRetry(
+      () => {
+        attemptsMade += 1;
+        return fetchGeocodeOnce(normalizedCityName);
+      },
+      {
+        onRetry: ({ error, willRetry }) => {
+          if (willRetry) {
+            console.warn(
+              `[geocodingService] Attempt ${attemptsMade} failed, retrying:`,
+              error instanceof Error ? error.message : error,
+            );
+          }
+        },
+      },
+    );
+  } catch (error) {
+    trackError({
+      service: 'geocoding',
+      severity: 'warning',
+      error,
+      retryCount: attemptsMade - 1,
+      context: { cityName: normalizedCityName },
+    });
+    throw error;
+  }
 }

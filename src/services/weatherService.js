@@ -1,8 +1,10 @@
+import { withRetry } from '../lib/retry.js';
 import {
   weatherToolInputSchema,
   openMeteoCurrentWeatherResponseSchema,
   currentWeatherResultSchema,
 } from '../schemas/weatherSchemas.js';
+import { trackError } from './errorTracker.js';
 
 const FORECAST_BASE_URL = 'https://api.open-meteo.com/v1/forecast';
 const REQUEST_TIMEOUT_MS = 5000;
@@ -33,18 +35,7 @@ function describeWeatherCode(code) {
   return WEATHER_CODE_DESCRIPTIONS[code] ?? `weather code ${code}`;
 }
 
-export async function getCurrentWeather(latitude, longitude) {
-  const inputValidation = weatherToolInputSchema.safeParse({
-    latitude,
-    longitude,
-  });
-  if (!inputValidation.success) {
-    const message = inputValidation.error.issues
-      .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
-      .join(' ');
-    throw new Error(`Invalid coordinates: ${message}`);
-  }
-  const validCoordinates = inputValidation.data;
+async function fetchCurrentWeatherOnce(validCoordinates) {
   const url = new URL(FORECAST_BASE_URL);
   url.searchParams.set('latitude', String(validCoordinates.latitude));
   url.searchParams.set('longitude', String(validCoordinates.longitude));
@@ -77,9 +68,11 @@ export async function getCurrentWeather(latitude, longitude) {
     clearTimeout(timeoutId);
   }
   if (!response.ok) {
-    throw new Error(
+    const statusError = new Error(
       `Weather forecast request failed with status ${response.status}.`
     );
+    statusError.status = response.status;
+    throw statusError;
   }
   let rawData;
   try {
@@ -111,4 +104,49 @@ export async function getCurrentWeather(latitude, longitude) {
     );
   }
   return resultValidation.data;
+}
+
+export async function getCurrentWeather(latitude, longitude) {
+  const inputValidation = weatherToolInputSchema.safeParse({
+    latitude,
+    longitude,
+  });
+  if (!inputValidation.success) {
+    const message = inputValidation.error.issues
+      .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+      .join(' ');
+
+    throw new Error(`Invalid coordinates: ${message}`);
+  }
+
+  const validCoordinates = inputValidation.data;
+  let attemptsMade = 0;
+
+  try {
+    return await withRetry(
+      () => {
+        attemptsMade += 1;
+        return fetchCurrentWeatherOnce(validCoordinates);
+      },
+      {
+        onRetry: ({ error, willRetry }) => {
+          if (willRetry) {
+            console.warn(
+              `[weatherService] Attempt ${attemptsMade} failed, retrying:`,
+              error instanceof Error ? error.message : error,
+            );
+          }
+        },
+      },
+    );
+  } catch (error) {
+    trackError({
+      service: 'weather',
+      severity: 'warning',
+      error,
+      retryCount: attemptsMade - 1,
+      context: { latitude: validCoordinates.latitude, longitude: validCoordinates.longitude },
+    });
+    throw error;
+  }
 }

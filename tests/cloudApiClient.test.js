@@ -104,10 +104,10 @@ describe('createCloudApiSender', () => {
     );
   });
 
-  it('aborts the request when it exceeds the timeout', async () => {
+  it('aborts the request when it exceeds the timeout without retrying the send', async () => {
     vi.useFakeTimers();
 
-    vi.spyOn(globalThis, 'fetch').mockImplementation(
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
       (_url, { signal }) =>
         new Promise((_resolve, reject) => {
           signal.addEventListener('abort', () => {
@@ -129,6 +129,50 @@ describe('createCloudApiSender', () => {
     );
 
     await vi.advanceTimersByTimeAsync(8000);
+
     await rejectionExpectation;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes rawSend as a single-attempt sender with no retry', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 503,
+      text: async () => 'temporarily unavailable',
+    });
+
+    const sendMessage = createCloudApiSender({
+      phoneNumberId: '123',
+      accessToken: 'token',
+    });
+
+    expect(typeof sendMessage.rawSend).toBe('function');
+
+    await expect(
+      sendMessage.rawSend('212600000000', 'Hi'),
+    ).rejects.toThrow('WhatsApp Cloud API request failed with status 503');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a transient send failure because WhatsApp sends are not idempotent', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue({
+        ok: false,
+        status: 503,
+        text: async () => 'temporarily unavailable',
+      });
+
+    const sendMessage = createCloudApiSender({
+      phoneNumberId: '123',
+      accessToken: 'token',
+    });
+
+    await expect(sendMessage('212600000000', 'Hi')).rejects.toThrow(
+      'WhatsApp Cloud API request failed with status 503',
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

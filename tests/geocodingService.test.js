@@ -103,7 +103,7 @@ describe('geocodeCity', () => {
       'invalid location data or coordinates'
     );
   });
-  it('throws when the API returns an unsuccessful response', async () => {
+  it('throws when the API returns an unsuccessful response (after retries)', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: false,
       status: 500,
@@ -132,7 +132,7 @@ describe('geocodeCity', () => {
       'The geocoding service returned an invalid JSON response.'
     );
   });
-  it('aborts the request when it exceeds the timeout', async () => {
+  it('aborts the request when it exceeds the timeout, after exhausting retries', async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       (_url, { signal }) =>
@@ -148,7 +148,12 @@ describe('geocodeCity', () => {
     const rejectionExpectation = expect(requestPromise).rejects.toThrow(
       'Geocoding request timed out after 5000ms.'
     );
-    await vi.advanceTimersByTimeAsync(5000);
+
+    for (let i = 0; i < 3; i += 1) {
+      await vi.advanceTimersByTimeAsync(5000);
+      await vi.advanceTimersByTimeAsync(5000);
+    }
+
     await rejectionExpectation;
   });
 });

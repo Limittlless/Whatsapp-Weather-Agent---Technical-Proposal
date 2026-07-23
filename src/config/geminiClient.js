@@ -22,7 +22,7 @@ export function createGeminiModel() {
     apiKey,
     reasoningEffort: 'low',
     maxOutputTokens: 1024,
-    maxRetries: 1,
+    maxRetries: 0,
   });
 
   return model.bindTools(agentTools);

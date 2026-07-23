@@ -2,6 +2,11 @@ import { Router } from 'express';
 import { runAgent as defaultRunAgent } from '../agent/runAgent.js';
 import { claimMessage as defaultClaimMessage } from '../services/processedMessages.js';
 import { createMetaSignatureVerifier } from '../middleware/verifyMetaSignature.js';
+import { isAdminNumber } from '../services/adminAuth.js';
+import {
+  isAdminCommandMessage,
+  executeAdminCommand,
+} from '../services/adminCommands.js';
 
 export function createCloudApiWebhookRouter({
   verifyToken,
@@ -38,29 +43,43 @@ export function createCloudApiWebhookRouter({
     res.sendStatus(403);
   });
 
-  router.post('/', verifyMetaSignature, async (req, res) => {
+  router.post('/', verifyMetaSignature, (req, res) => {
+    const entries = req.body?.entry ?? [];
     res.sendStatus(200);
 
-    const entries = req.body?.entry ?? [];
-
-    for (const entry of entries) {
-      const changes = entry?.changes ?? [];
-
-      for (const change of changes) {
-        const messages = change?.value?.messages ?? [];
-
-        for (const message of messages) {
-          await handleIncomingMessage(message, {
-            runAgentFn,
-            sendMessageFn,
-            claimMessageFn,
-          });
-        }
-      }
-    }
+    setTimeout(() => {
+      processIncomingEntries(entries, {
+        runAgentFn,
+        sendMessageFn,
+        claimMessageFn,
+      }).catch((error) => {
+        console.error('[webhook] Failed to process webhook payload:', error);
+      });
+    }, 0);
   });
 
   return router;
+}
+
+async function processIncomingEntries(
+  entries,
+  { runAgentFn, sendMessageFn, claimMessageFn }
+) {
+  for (const entry of entries) {
+    const changes = entry?.changes ?? [];
+
+    for (const change of changes) {
+      const messages = change?.value?.messages ?? [];
+
+      for (const message of messages) {
+        await handleIncomingMessage(message, {
+          runAgentFn,
+          sendMessageFn,
+          claimMessageFn,
+        });
+      }
+    }
+  }
 }
 
 async function handleIncomingMessage(
@@ -84,6 +103,20 @@ async function handleIncomingMessage(
 
     if (!shouldProcess) {
       console.log(`[webhook] Skipping already-processed message ${messageId}`);
+      return;
+    }
+
+    if (isAdminCommandMessage(userMessage) && isAdminNumber(whatsappId)) {
+      try {
+        const reply = await executeAdminCommand(userMessage);
+        await sendMessageFn(whatsappId, reply);
+      } catch (error) {
+        console.error('[webhook] Admin command failed:', error);
+        await sendMessageFn(
+          whatsappId,
+          'حدث خطأ أثناء تنفيذ الأمر. حاول مرة أخرى.'
+        );
+      }
       return;
     }
 
