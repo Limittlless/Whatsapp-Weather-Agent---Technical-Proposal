@@ -104,10 +104,10 @@ describe('createCloudApiSender', () => {
     );
   });
 
-  it('aborts the request when it exceeds the timeout, after exhausting retries', async () => {
+  it('aborts the request when it exceeds the timeout without retrying the send', async () => {
     vi.useFakeTimers();
 
-    vi.spyOn(globalThis, 'fetch').mockImplementation(
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
       (_url, { signal }) =>
         new Promise((_resolve, reject) => {
           signal.addEventListener('abort', () => {
@@ -128,12 +128,10 @@ describe('createCloudApiSender', () => {
       'timed out after 8000ms'
     );
 
-    for (let i = 0; i < 3; i += 1) {
-      await vi.advanceTimersByTimeAsync(8000);
-      await vi.advanceTimersByTimeAsync(5000);
-    }
+    await vi.advanceTimersByTimeAsync(8000);
 
     await rejectionExpectation;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('exposes rawSend as a single-attempt sender with no retry', async () => {
@@ -157,18 +155,13 @@ describe('createCloudApiSender', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('retries a transient (5xx) failure via sendMessage and eventually succeeds', async () => {
+  it('does not retry a transient send failure because WhatsApp sends are not idempotent', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce({
+      .mockResolvedValue({
         ok: false,
         status: 503,
         text: async () => 'temporarily unavailable',
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({ messages: [{ id: 'wamid.456' }] }),
       });
 
     const sendMessage = createCloudApiSender({
@@ -176,9 +169,10 @@ describe('createCloudApiSender', () => {
       accessToken: 'token',
     });
 
-    const result = await sendMessage('212600000000', 'Hi');
+    await expect(sendMessage('212600000000', 'Hi')).rejects.toThrow(
+      'WhatsApp Cloud API request failed with status 503',
+    );
 
-    expect(result).toEqual({ messages: [{ id: 'wamid.456' }] });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

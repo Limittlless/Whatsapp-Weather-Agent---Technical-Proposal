@@ -118,9 +118,16 @@ export async function runAgent({
       let attemptsMade = 0;
 
       const aiMessage = await withRetry(
-        () => {
+        async () => {
           attemptsMade += 1;
-          return activeModel.invoke(messages);
+          try {
+            const result = await activeModel.invoke(messages);
+            recordGeminiCall({ ok: true });
+            return result;
+          } catch (error) {
+            recordGeminiCall({ ok: false, error });
+            throw error;
+          }
         },
         {
           maxAttempts: GEMINI_MAX_ATTEMPTS,
@@ -137,12 +144,7 @@ export async function runAgent({
           },
         },
       )
-        .then((result) => {
-          recordGeminiCall({ ok: true });
-          return result;
-        })
         .catch((error) => {
-          recordGeminiCall({ ok: false, error });
           trackError({
             service: 'gemini',
             severity: 'warning',

@@ -415,6 +415,11 @@ describe('runAgent', () => {
 
       expect(result).toBe('Recovered!');
       expect(model.invoke).toHaveBeenCalledTimes(2);
+
+      const snapshot = getUsageSnapshot();
+      expect(snapshot.geminiCallsTotal).toBe(2);
+      expect(snapshot.geminiCallsFailed).toBe(1);
+      expect(snapshot.geminiCallsOk).toBe(1);
     });
 
     it('gives up after exhausting retries on a persistently retryable error', async () => {
@@ -435,6 +440,11 @@ describe('runAgent', () => {
         'Sorry, I could not process your request right now. Please try again shortly.',
       );
       expect(model.invoke).toHaveBeenCalledTimes(3);
+
+      const snapshot = getUsageSnapshot();
+      expect(snapshot.geminiCallsTotal).toBe(3);
+      expect(snapshot.geminiCallsFailed).toBe(3);
+      expect(snapshot.geminiCallsOk).toBe(0);
     }, 10_000);
   });
 });

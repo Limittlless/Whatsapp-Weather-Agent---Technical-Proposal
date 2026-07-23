@@ -1,4 +1,3 @@
-import { withRetry } from '../lib/retry.js';
 import { trackError } from '../services/errorTracker.js';
 
 const GRAPH_API_VERSION = 'v23.0';
@@ -96,31 +95,14 @@ export function createCloudApiSender({ phoneNumberId, accessToken }) {
   }
 
   async function sendMessage(to, body) {
-    let attemptsMade = 0;
-
     try {
-      return await withRetry(
-        () => {
-          attemptsMade += 1;
-          return rawSend(to, body);
-        },
-        {
-          onRetry: ({ error, willRetry }) => {
-            if (willRetry) {
-              console.warn(
-                `[cloudApiClient] Send attempt ${attemptsMade} failed, retrying:`,
-                error instanceof Error ? error.message : error,
-              );
-            }
-          },
-        },
-      );
+      return await rawSend(to, body);
     } catch (error) {
       trackError({
         service: 'whatsapp',
         severity: 'critical',
         error,
-        retryCount: attemptsMade - 1,
+        retryCount: 0,
         context: { to },
       });
       throw error;
