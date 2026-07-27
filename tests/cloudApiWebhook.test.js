@@ -8,6 +8,8 @@ function buildTestApp({
   runAgentFn,
   sendMessageFn,
   claimMessageFn,
+  isAuthorizedFn = vi.fn().mockResolvedValue(true),
+  executeAdminCommandFn,
   appSecret,
   verifyToken = 'test-verify-token',
 }) {
@@ -26,10 +28,39 @@ function buildTestApp({
       runAgentFn,
       sendMessageFn,
       claimMessageFn,
+      isAuthorizedFn,
+      executeAdminCommandFn,
       appSecret,
     })
   );
   return app;
+}
+
+function createTextPayload({
+  from = '212600000000',
+  body = 'Hello',
+  id = 'message-1',
+} = {}) {
+  return {
+    entry: [
+      {
+        changes: [
+          {
+            value: {
+              messages: [
+                {
+                  id,
+                  from,
+                  type: 'text',
+                  text: { body },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
 }
 
 describe('createCloudApiWebhookRouter', () => {
@@ -278,6 +309,180 @@ describe('createCloudApiWebhookRouter', () => {
       );
       expect(runAgentFn).not.toHaveBeenCalled();
       expect(sendMessageFn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('user authorization gate', () => {
+    const ORIGINAL_ADMIN_ENV = process.env.ADMIN_WHATSAPP_NUMBERS;
+
+    afterEach(() => {
+      if (ORIGINAL_ADMIN_ENV === undefined) {
+        delete process.env.ADMIN_WHATSAPP_NUMBERS;
+      } else {
+        process.env.ADMIN_WHATSAPP_NUMBERS = ORIGINAL_ADMIN_ENV;
+      }
+    });
+
+    it('blocks an unauthorized user before invoking the agent', async () => {
+      delete process.env.ADMIN_WHATSAPP_NUMBERS;
+
+      const runAgentFn = vi.fn();
+      const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+      const claimMessageFn = vi.fn().mockResolvedValue(true);
+      const isAuthorizedFn = vi.fn().mockResolvedValue(false);
+      const app = buildTestApp({
+        runAgentFn,
+        sendMessageFn,
+        claimMessageFn,
+        isAuthorizedFn,
+      });
+
+      await request(app)
+        .post('/webhook')
+        .send(createTextPayload({ from: '212699999999' }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(isAuthorizedFn).toHaveBeenCalledWith('212699999999');
+      expect(runAgentFn).not.toHaveBeenCalled();
+      expect(sendMessageFn).toHaveBeenCalledTimes(1);
+      expect(sendMessageFn.mock.calls[0][1]).toContain('not authorized');
+    });
+
+    it('allows an authorized user to reach the agent', async () => {
+      delete process.env.ADMIN_WHATSAPP_NUMBERS;
+
+      const runAgentFn = vi.fn().mockResolvedValue('Authorized reply');
+      const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+      const claimMessageFn = vi.fn().mockResolvedValue(true);
+      const isAuthorizedFn = vi.fn().mockResolvedValue(true);
+      const app = buildTestApp({
+        runAgentFn,
+        sendMessageFn,
+        claimMessageFn,
+        isAuthorizedFn,
+      });
+
+      await request(app)
+        .post('/webhook')
+        .send(createTextPayload({ from: '212688888888' }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(runAgentFn).toHaveBeenCalledWith({
+        whatsappId: '212688888888',
+        userMessage: 'Hello',
+      });
+      expect(sendMessageFn).toHaveBeenCalledWith(
+        '212688888888',
+        'Authorized reply'
+      );
+    });
+
+    it('fails closed when the authorization service is unavailable', async () => {
+      delete process.env.ADMIN_WHATSAPP_NUMBERS;
+
+      const runAgentFn = vi.fn();
+      const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+      const claimMessageFn = vi.fn().mockResolvedValue(true);
+      const isAuthorizedFn = vi
+        .fn()
+        .mockRejectedValue(new Error('Supabase unavailable'));
+      const app = buildTestApp({
+        runAgentFn,
+        sendMessageFn,
+        claimMessageFn,
+        isAuthorizedFn,
+      });
+
+      await request(app).post('/webhook').send(createTextPayload());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(runAgentFn).not.toHaveBeenCalled();
+      expect(sendMessageFn).toHaveBeenCalledTimes(1);
+      expect(sendMessageFn.mock.calls[0][1]).toContain(
+        'Could not verify access'
+      );
+    });
+
+    it('lets configured admins use the agent without a database authorization row', async () => {
+      process.env.ADMIN_WHATSAPP_NUMBERS = '212600000000';
+
+      const runAgentFn = vi.fn().mockResolvedValue('Admin reply');
+      const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+      const claimMessageFn = vi.fn().mockResolvedValue(true);
+      const isAuthorizedFn = vi.fn().mockResolvedValue(false);
+      const app = buildTestApp({
+        runAgentFn,
+        sendMessageFn,
+        claimMessageFn,
+        isAuthorizedFn,
+      });
+
+      await request(app).post('/webhook').send(createTextPayload());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(isAuthorizedFn).not.toHaveBeenCalled();
+      expect(runAgentFn).toHaveBeenCalledTimes(1);
+    });
+
+    it('passes the admin WhatsApp ID into an auth command', async () => {
+      process.env.ADMIN_WHATSAPP_NUMBERS = '212600000000';
+
+      const runAgentFn = vi.fn();
+      const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+      const claimMessageFn = vi.fn().mockResolvedValue(true);
+      const isAuthorizedFn = vi.fn();
+      const executeAdminCommandFn = vi
+        .fn()
+        .mockResolvedValue('Authorization list');
+      const app = buildTestApp({
+        runAgentFn,
+        sendMessageFn,
+        claimMessageFn,
+        isAuthorizedFn,
+        executeAdminCommandFn,
+      });
+
+      await request(app)
+        .post('/webhook')
+        .send(createTextPayload({ body: '/auth list' }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(executeAdminCommandFn).toHaveBeenCalledWith('/auth list', {
+        adminWhatsappId: '212600000000',
+      });
+      expect(isAuthorizedFn).not.toHaveBeenCalled();
+      expect(runAgentFn).not.toHaveBeenCalled();
+    });
+
+    it('never executes an auth command from a non-admin number', async () => {
+      process.env.ADMIN_WHATSAPP_NUMBERS = '212600000000';
+
+      const runAgentFn = vi.fn();
+      const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+      const claimMessageFn = vi.fn().mockResolvedValue(true);
+      const isAuthorizedFn = vi.fn().mockResolvedValue(false);
+      const executeAdminCommandFn = vi.fn();
+      const app = buildTestApp({
+        runAgentFn,
+        sendMessageFn,
+        claimMessageFn,
+        isAuthorizedFn,
+        executeAdminCommandFn,
+      });
+
+      await request(app)
+        .post('/webhook')
+        .send(
+          createTextPayload({
+            from: '212699999999',
+            body: '/auth add 212688888888',
+          })
+        );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(executeAdminCommandFn).not.toHaveBeenCalled();
+      expect(runAgentFn).not.toHaveBeenCalled();
+      expect(sendMessageFn.mock.calls[0][1]).toContain('not authorized');
     });
   });
 

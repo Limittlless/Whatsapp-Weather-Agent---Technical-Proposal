@@ -82,7 +82,13 @@ describe('verifySupabaseConnection', () => {
     const { verifySupabaseConnection } = await import('../src/config/supabaseClient.js');
     await expect(verifySupabaseConnection()).resolves.toBe(true);
     expect(mockFrom).toHaveBeenCalledWith('conversations');
+    expect(mockFrom).toHaveBeenCalledWith('authorized_users');
+    expect(mockFrom).toHaveBeenCalledTimes(2);
     expect(mockSelect).toHaveBeenCalledWith('id', { count: 'exact', head: true });
+    expect(mockSelect).toHaveBeenCalledWith('whatsapp_id', {
+      count: 'exact',
+      head: true,
+    });
   });
   it('throws when the conversations table does not exist (PGRST205)', async () => {
     mockSelect.mockResolvedValue({
@@ -91,6 +97,20 @@ describe('verifySupabaseConnection', () => {
     const { verifySupabaseConnection } = await import('../src/config/supabaseClient.js');
     await expect(verifySupabaseConnection()).rejects.toThrow(
       /Supabase connection check failed/
+    );
+  });
+  it('throws when the authorized_users migration has not been applied', async () => {
+    mockSelect
+      .mockResolvedValueOnce({ error: null })
+      .mockResolvedValueOnce({
+        error: {
+          code: 'PGRST205',
+          message: 'relation "authorized_users" does not exist',
+        },
+      });
+    const { verifySupabaseConnection } = await import('../src/config/supabaseClient.js');
+    await expect(verifySupabaseConnection()).rejects.toThrow(
+      /authorized_users/
     );
   });
   it('throws with the underlying message on an auth/connection error', async () => {

@@ -1,5 +1,12 @@
 import { verifySupabaseConnection } from '../config/supabaseClient.js';
 import { getUsageSnapshot } from './usageMetrics.js';
+import {
+  authorizeUser,
+  getAuthorizedUser,
+  listAuthorizedUsers,
+  normalizeWhatsappId,
+  revokeUser,
+} from './userAuthorization.js';
 
 const COMMAND_PREFIX = '/';
 
@@ -7,8 +14,19 @@ const COMMAND_ALIASES = {
   status: ['status', 'حالة', 'الحالة'],
   uptime: ['uptime', 'توفر', 'مدة-التشغيل', 'مدة_التشغيل'],
   quota: ['quota', 'فيش-كوتا', 'فيش_كوتا', 'فيشكوتا', 'كوتا'],
+  auth: ['auth', 'access', 'صلاحيات', 'تصريح'],
   help: ['help', 'مساعدة', 'اوامر', 'أوامر'],
 };
+
+const AUTH_ACTION_ALIASES = {
+  add: ['add', 'allow', 'approve', 'إضافة', 'سماح'],
+  remove: ['remove', 'revoke', 'deny', 'حذف', 'منع'],
+  status: ['status', 'check', 'حالة'],
+  list: ['list', 'users', 'قائمة'],
+  help: ['help', 'مساعدة'],
+};
+
+const AUTH_ACTIONS = new Set(Object.keys(AUTH_ACTION_ALIASES));
 
 function resolveCommandName(rawCommand) {
   const normalized = rawCommand.trim().toLowerCase();
@@ -20,6 +38,18 @@ function resolveCommandName(rawCommand) {
   }
 
   return null;
+}
+
+function resolveAuthAction(rawAction) {
+  const normalized = String(rawAction ?? '').trim().toLowerCase();
+
+  for (const [canonical, aliases] of Object.entries(AUTH_ACTION_ALIASES)) {
+    if (aliases.some((alias) => alias.toLowerCase() === normalized)) {
+      return canonical;
+    }
+  }
+
+  return normalized || 'help';
 }
 
 export function isAdminCommandMessage(text) {
@@ -125,13 +155,130 @@ function handleHelp() {
     '/status — حالة النظام العامة (تشغيل، Supabase، آخر نشاط)',
     '/uptime — مدة تشغيل الخادم منذ آخر إعادة تشغيل',
     '/quota — إحصائيات استخدام Gemini المتتبَّعة داخليًا',
+    '/auth — إدارة الأرقام المصرح لها باستخدام البوت',
     '/help — عرض هذه القائمة',
   ].join('\n');
 }
 
-export async function executeAdminCommand(text) {
+function handleAuthHelp() {
+  return [
+    '🔐 *إدارة صلاحيات البوت / Bot access*',
+    '',
+    '/auth add <number> [name] — authorize a number',
+    '/auth remove <number> — revoke a number',
+    '/auth status <number> — check a number',
+    '/auth list — list active authorized users',
+    '',
+    'Example: /auth add 212600000000 Ahmed',
+  ].join('\n');
+}
+
+function parseAuthWhatsappId(rawValue) {
+  try {
+    return {
+      whatsappId: normalizeWhatsappId(rawValue),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      whatsappId: null,
+      error: `❌ ${error.message}\n\n${handleAuthHelp()}`,
+    };
+  }
+}
+
+async function handleAuth(args, { adminWhatsappId } = {}) {
+  if (!adminWhatsappId) {
+    throw new Error('adminWhatsappId is required for /auth commands.');
+  }
+
+  const [rawAction, rawWhatsappId, ...nameParts] = args;
+  const action = resolveAuthAction(rawAction);
+
+  if (action === 'help') {
+    return handleAuthHelp();
+  }
+
+  if (!AUTH_ACTIONS.has(action)) {
+    return `❓ Unknown auth action: "${rawAction}"\n\n${handleAuthHelp()}`;
+  }
+
+  if (action === 'list') {
+    const users = await listAuthorizedUsers();
+
+    if (users.length === 0) {
+      return '🔐 No active authorized users.';
+    }
+
+    return [
+      `🔐 *Authorized users (${users.length}, showing up to 30)*`,
+      '',
+      ...users.map((user, index) => {
+        const name = user.display_name ? ` — ${user.display_name}` : '';
+        return `${index + 1}. ${user.whatsapp_id}${name}`;
+      }),
+    ].join('\n');
+  }
+
+  const parsedId = parseAuthWhatsappId(rawWhatsappId);
+
+  if (parsedId.error) {
+    return parsedId.error;
+  }
+
+  if (action === 'add') {
+    const displayName = nameParts.join(' ').trim() || undefined;
+
+    try {
+      const user = await authorizeUser({
+        whatsappId: parsedId.whatsappId,
+        displayName,
+        authorizedBy: adminWhatsappId,
+      });
+      const name = user.display_name ? ` (${user.display_name})` : '';
+
+      return `✅ Authorized ${user.whatsapp_id}${name}.`;
+    } catch (error) {
+      if (error.message.includes('Display name')) {
+        return `❌ ${error.message}`;
+      }
+      throw error;
+    }
+  }
+
+  if (action === 'remove') {
+    const revoked = await revokeUser({
+      whatsappId: parsedId.whatsappId,
+      revokedBy: adminWhatsappId,
+    });
+
+    return revoked
+      ? `✅ Revoked access for ${parsedId.whatsappId}.`
+      : `ℹ️ ${parsedId.whatsappId} is not currently authorized.`;
+  }
+
+  if (action === 'status') {
+    const user = await getAuthorizedUser(parsedId.whatsappId);
+
+    if (!user?.active) {
+      return `⛔ ${parsedId.whatsappId} is not authorized.`;
+    }
+
+    const name = user.display_name ? `\nName: ${user.display_name}` : '';
+    return (
+      `✅ ${parsedId.whatsappId} is authorized.` +
+      name +
+      `\nAuthorized by: ${user.authorized_by}` +
+      `\nAuthorized at: ${user.authorized_at}`
+    );
+  }
+
+  return handleAuthHelp();
+}
+
+export async function executeAdminCommand(text, context = {}) {
   const withoutPrefix = text.trim().slice(COMMAND_PREFIX.length);
-  const [firstToken] = withoutPrefix.split(/\s+/);
+  const [firstToken, ...args] = withoutPrefix.split(/\s+/);
   const commandName = resolveCommandName(firstToken ?? '');
 
   switch (commandName) {
@@ -141,6 +288,8 @@ export async function executeAdminCommand(text) {
       return handleUptime();
     case 'quota':
       return handleQuota();
+    case 'auth':
+      return handleAuth(args, context);
     case 'help':
       return handleHelp();
     default:

@@ -1,11 +1,31 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockVerifySupabaseConnection } = vi.hoisted(() => ({
+const {
+  mockVerifySupabaseConnection,
+  mockAuthorizeUser,
+  mockGetAuthorizedUser,
+  mockListAuthorizedUsers,
+  mockNormalizeWhatsappId,
+  mockRevokeUser,
+} = vi.hoisted(() => ({
   mockVerifySupabaseConnection: vi.fn(),
+  mockAuthorizeUser: vi.fn(),
+  mockGetAuthorizedUser: vi.fn(),
+  mockListAuthorizedUsers: vi.fn(),
+  mockNormalizeWhatsappId: vi.fn(),
+  mockRevokeUser: vi.fn(),
 }));
 
 vi.mock('../src/config/supabaseClient.js', () => ({
   verifySupabaseConnection: mockVerifySupabaseConnection,
+}));
+
+vi.mock('../src/services/userAuthorization.js', () => ({
+  authorizeUser: mockAuthorizeUser,
+  getAuthorizedUser: mockGetAuthorizedUser,
+  listAuthorizedUsers: mockListAuthorizedUsers,
+  normalizeWhatsappId: mockNormalizeWhatsappId,
+  revokeUser: mockRevokeUser,
 }));
 
 const {
@@ -21,6 +41,22 @@ describe('adminCommands', () => {
     __resetUsageForTests();
     mockVerifySupabaseConnection.mockReset();
     mockVerifySupabaseConnection.mockResolvedValue(true);
+    mockAuthorizeUser.mockReset();
+    mockGetAuthorizedUser.mockReset();
+    mockListAuthorizedUsers.mockReset();
+    mockNormalizeWhatsappId.mockReset();
+    mockRevokeUser.mockReset();
+    mockNormalizeWhatsappId.mockImplementation((value) => {
+      const normalized = String(value ?? '')
+        .trim()
+        .replace(/[\s()+-]/g, '');
+
+      if (!/^\d{7,15}$/.test(normalized)) {
+        throw new Error('WhatsApp ID must contain 7 to 15 digits.');
+      }
+
+      return normalized;
+    });
   });
 
   describe('isAdminCommandMessage', () => {
@@ -132,6 +168,141 @@ describe('adminCommands', () => {
       expect(reply).toContain('أوامر المسؤول المتاحة');
       expect(reply).toContain('/status');
       expect(reply).toContain('/quota');
+      expect(reply).toContain('/auth');
+    });
+
+    it('shows usage instructions for /auth', async () => {
+      const reply = await executeAdminCommand('/auth', {
+        adminWhatsappId: '212600000000',
+      });
+
+      expect(reply).toContain('/auth add');
+      expect(reply).toContain('/auth remove');
+      expect(reply).toContain('/auth status');
+      expect(reply).toContain('/auth list');
+    });
+
+    it('authorizes a user with /auth add', async () => {
+      mockAuthorizeUser.mockResolvedValue({
+        whatsapp_id: '212611111111',
+        display_name: 'Ahmed Ben Ali',
+      });
+
+      const reply = await executeAdminCommand(
+        '/auth add +212611-111-111 Ahmed Ben Ali',
+        { adminWhatsappId: '212600000000' }
+      );
+
+      expect(mockAuthorizeUser).toHaveBeenCalledWith({
+        whatsappId: '212611111111',
+        displayName: 'Ahmed Ben Ali',
+        authorizedBy: '212600000000',
+      });
+      expect(reply).toContain('Authorized 212611111111');
+      expect(reply).toContain('Ahmed Ben Ali');
+    });
+
+    it('revokes a user with /auth remove', async () => {
+      mockRevokeUser.mockResolvedValue(true);
+
+      const reply = await executeAdminCommand(
+        '/auth remove 212611111111',
+        { adminWhatsappId: '212600000000' }
+      );
+
+      expect(mockRevokeUser).toHaveBeenCalledWith({
+        whatsappId: '212611111111',
+        revokedBy: '212600000000',
+      });
+      expect(reply).toContain('Revoked access');
+    });
+
+    it('reports when /auth remove targets an inactive user', async () => {
+      mockRevokeUser.mockResolvedValue(false);
+
+      const reply = await executeAdminCommand(
+        '/auth remove 212611111111',
+        { adminWhatsappId: '212600000000' }
+      );
+
+      expect(reply).toContain('not currently authorized');
+    });
+
+    it('reports an active user with /auth status', async () => {
+      mockGetAuthorizedUser.mockResolvedValue({
+        whatsapp_id: '212611111111',
+        display_name: 'Ahmed',
+        active: true,
+        authorized_by: '212600000000',
+        authorized_at: '2026-07-27T19:00:00.000Z',
+      });
+
+      const reply = await executeAdminCommand(
+        '/auth status 212611111111',
+        { adminWhatsappId: '212600000000' }
+      );
+
+      expect(mockGetAuthorizedUser).toHaveBeenCalledWith('212611111111');
+      expect(reply).toContain('is authorized');
+      expect(reply).toContain('Name: Ahmed');
+      expect(reply).toContain('Authorized by: 212600000000');
+    });
+
+    it('reports an unknown user with /auth status', async () => {
+      mockGetAuthorizedUser.mockResolvedValue(null);
+
+      const reply = await executeAdminCommand(
+        '/auth status 212611111111',
+        { adminWhatsappId: '212600000000' }
+      );
+
+      expect(reply).toContain('is not authorized');
+    });
+
+    it('lists active users with /auth list', async () => {
+      mockListAuthorizedUsers.mockResolvedValue([
+        {
+          whatsapp_id: '212611111111',
+          display_name: 'Ahmed',
+        },
+        {
+          whatsapp_id: '212622222222',
+          display_name: null,
+        },
+      ]);
+
+      const reply = await executeAdminCommand('/auth list', {
+        adminWhatsappId: '212600000000',
+      });
+
+      expect(reply).toContain('Authorized users (2, showing up to 30)');
+      expect(reply).toContain('212611111111 — Ahmed');
+      expect(reply).toContain('212622222222');
+    });
+
+    it('rejects an invalid WhatsApp ID without calling Supabase', async () => {
+      const reply = await executeAdminCommand('/auth add invalid-number', {
+        adminWhatsappId: '212600000000',
+      });
+
+      expect(reply).toContain('WhatsApp ID must contain');
+      expect(mockAuthorizeUser).not.toHaveBeenCalled();
+    });
+
+    it('requires admin context for /auth commands', async () => {
+      await expect(executeAdminCommand('/auth list')).rejects.toThrow(
+        'adminWhatsappId is required'
+      );
+    });
+
+    it('returns auth help for an unknown auth action', async () => {
+      const reply = await executeAdminCommand('/auth something', {
+        adminWhatsappId: '212600000000',
+      });
+
+      expect(reply).toContain('Unknown auth action');
+      expect(reply).toContain('/auth add');
+      expect(mockAuthorizeUser).not.toHaveBeenCalled();
     });
 
     it('returns a helpful message for an unknown command', async () => {

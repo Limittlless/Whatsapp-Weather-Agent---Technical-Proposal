@@ -91,12 +91,24 @@ export async function withSupabaseRetry(queryFn, { operation, context } = {}) {
 
 export async function verifySupabaseConnection() {
   const supabase = getSupabaseClient();
-  const { error } = await supabase
-    .from('conversations')
-    .select('id', { count: 'exact', head: true });
-  if (error) {
-    throw new Error(`Supabase connection check failed: ${error.message}`);
+
+  const requiredTables = [
+    { table: 'conversations', column: 'id' },
+    { table: 'authorized_users', column: 'whatsapp_id' },
+  ];
+
+  for (const { table, column } of requiredTables) {
+    const { error } = await supabase
+      .from(table)
+      .select(column, { count: 'exact', head: true });
+
+    if (error) {
+      throw new Error(
+        `Supabase connection check failed for "${table}": ${error.message}`
+      );
+    }
   }
+
   return true;
 }
 
