@@ -5,7 +5,7 @@ import {
   ToolMessage,
 } from '@langchain/core/messages';
 
-function normalizeContent(content) {
+export function extractVisibleText(content) {
   if (content === null || content === undefined) {
     return '';
   }
@@ -21,16 +21,20 @@ function normalizeContent(content) {
           return part;
         }
 
+        if (part?.thought === true) {
+          return '';
+        }
+
         if (typeof part?.text === 'string') {
           return part.text;
         }
 
-        return JSON.stringify(part);
+        return '';
       })
       .join('');
   }
 
-  return JSON.stringify(content);
+  return '';
 }
 
 export function toLangChainMessages(history) {
@@ -65,7 +69,7 @@ export function toLangChainMessages(history) {
 
 export function toStoredMessage(message) {
   const type = message.getType();
-  const content = normalizeContent(message.content);
+  const content = extractVisibleText(message.content);
 
   if (type === 'system') {
     return {

@@ -13,6 +13,7 @@ import { recordGeminiCall } from '../services/usageMetrics.js';
 import { prepareConversationHistory } from './conversationContext.js';
 import { executeToolCall } from './executeToolCall.js';
 import {
+  extractVisibleText,
   toLangChainMessages,
   toStoredMessage,
 } from './messageMapper.js';
@@ -169,7 +170,8 @@ export async function runAgent({
         continue;
       }
 
-      const recoveredCall = parseRawFunctionCallText(aiMessage.content);
+      const replyText = extractVisibleText(aiMessage.content);
+      const recoveredCall = parseRawFunctionCallText(replyText);
 
       if (recoveredCall) {
         console.warn(
@@ -192,13 +194,10 @@ export async function runAgent({
         continue;
       }
 
-      if (isDegenerateReply(aiMessage.content)) {
+      if (isDegenerateReply(replyText)) {
         console.error(
-          `[agent] Discarding a malformed model reply (length=${
-            typeof aiMessage.content === 'string'
-              ? aiMessage.content.length
-              : 'n/a'
-          }). Not sending it to WhatsApp and not saving it to history, ` +
+          `[agent] Discarding a malformed model reply (length=${replyText.length}). ` +
+            'Not sending it to WhatsApp and not saving it to history, ' +
             'so it cannot poison the next turn.',
         );
 
@@ -233,7 +232,7 @@ export async function runAgent({
         },
       );
 
-      return aiMessage.content;
+      return replyText;
     }
 
     throw new Error(

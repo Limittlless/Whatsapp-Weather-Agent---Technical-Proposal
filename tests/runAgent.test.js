@@ -49,6 +49,48 @@ describe('runAgent', () => {
     expect(saveConversationHistory).toHaveBeenCalledTimes(1);
   });
 
+  it('returns only visible text from a multipart Gemini response', async () => {
+    const model = {
+      invoke: vi.fn().mockResolvedValue(
+        new AIMessage({
+          content: [
+            {
+              type: 'text',
+              text: 'Private model reasoning.',
+              thought: true,
+              thoughtSignature: 'private-signature',
+            },
+            {
+              type: 'text',
+              text: 'It is sunny in Marrakech.',
+            },
+          ],
+        }),
+      ),
+    };
+
+    const result = await runAgent({
+      whatsappId: '212600000000',
+      userMessage: 'What is the weather in Marrakech?',
+      model,
+    });
+
+    expect(result).toBe('It is sunny in Marrakech.');
+    expect(saveConversationHistory).toHaveBeenCalledTimes(1);
+
+    const [, savedHistory] = saveConversationHistory.mock.calls[0];
+    expect(savedHistory.at(-1)).toEqual({
+      role: 'assistant',
+      content: 'It is sunny in Marrakech.',
+    });
+    expect(JSON.stringify(savedHistory)).not.toContain(
+      'Private model reasoning.',
+    );
+    expect(JSON.stringify(savedHistory)).not.toContain(
+      'private-signature',
+    );
+  });
+
   it('executes tool calls and invokes Gemini again', async () => {
     const firstResponse = new AIMessage({
       content: '',

@@ -112,6 +112,51 @@ describe('messageMapper', () => {
     });
   });
 
+  it('stores only visible text from multipart AI content', () => {
+    expect(
+      toStoredMessage(
+        new AIMessage({
+          content: [
+            {
+              type: 'text',
+              text: 'Internal reasoning.',
+              thought: true,
+              thoughtSignature: 'secret-signature',
+            },
+            {
+              type: 'functionCall',
+              functionCall: {
+                name: 'get_current_weather',
+                args: { latitude: 31.63, longitude: -8 },
+              },
+            },
+            {
+              type: 'text',
+              text: 'The visible answer.',
+            },
+          ],
+          tool_calls: [
+            {
+              id: 'call-1',
+              name: 'get_current_weather',
+              args: { latitude: 31.63, longitude: -8 },
+            },
+          ],
+        }),
+      ),
+    ).toEqual({
+      role: 'assistant',
+      content: 'The visible answer.',
+      tool_calls: [
+        {
+          id: 'call-1',
+          name: 'get_current_weather',
+          args: { latitude: 31.63, longitude: -8 },
+        },
+      ],
+    });
+  });
+
   it('throws for unsupported stored roles', () => {
     expect(() =>
       toLangChainMessages([
