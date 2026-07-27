@@ -3,16 +3,27 @@ import { runAgent as defaultRunAgent } from '../agent/runAgent.js';
 import { claimMessage as defaultClaimMessage } from '../services/processedMessages.js';
 import { createMetaSignatureVerifier } from '../middleware/verifyMetaSignature.js';
 import { isAdminNumber } from '../services/adminAuth.js';
+import { isUserAuthorized as defaultIsUserAuthorized } from '../services/userAuthorization.js';
 import {
   isAdminCommandMessage,
-  executeAdminCommand,
+  executeAdminCommand as defaultExecuteAdminCommand,
 } from '../services/adminCommands.js';
+
+const ACCESS_DENIED_MESSAGE =
+  '⛔ هذا الرقم غير مصرح له باستخدام البوت.\n' +
+  'This number is not authorized to use the bot.';
+
+const ACCESS_CHECK_FAILED_MESSAGE =
+  '⚠️ تعذر التحقق من صلاحية الوصول الآن. حاول مرة أخرى لاحقًا.\n' +
+  'Could not verify access right now. Please try again later.';
 
 export function createCloudApiWebhookRouter({
   verifyToken,
   runAgentFn = defaultRunAgent,
   sendMessageFn,
   claimMessageFn = defaultClaimMessage,
+  isAuthorizedFn = defaultIsUserAuthorized,
+  executeAdminCommandFn = defaultExecuteAdminCommand,
   appSecret,
 } = {}) {
   if (!verifyToken?.trim()) {
@@ -52,6 +63,8 @@ export function createCloudApiWebhookRouter({
         runAgentFn,
         sendMessageFn,
         claimMessageFn,
+        isAuthorizedFn,
+        executeAdminCommandFn,
       }).catch((error) => {
         console.error('[webhook] Failed to process webhook payload:', error);
       });
@@ -63,7 +76,13 @@ export function createCloudApiWebhookRouter({
 
 async function processIncomingEntries(
   entries,
-  { runAgentFn, sendMessageFn, claimMessageFn }
+  {
+    runAgentFn,
+    sendMessageFn,
+    claimMessageFn,
+    isAuthorizedFn,
+    executeAdminCommandFn,
+  }
 ) {
   for (const entry of entries) {
     const changes = entry?.changes ?? [];
@@ -76,6 +95,8 @@ async function processIncomingEntries(
           runAgentFn,
           sendMessageFn,
           claimMessageFn,
+          isAuthorizedFn,
+          executeAdminCommandFn,
         });
       }
     }
@@ -84,7 +105,13 @@ async function processIncomingEntries(
 
 async function handleIncomingMessage(
   message,
-  { runAgentFn, sendMessageFn, claimMessageFn }
+  {
+    runAgentFn,
+    sendMessageFn,
+    claimMessageFn,
+    isAuthorizedFn,
+    executeAdminCommandFn,
+  }
 ) {
   if (message?.type !== 'text') {
     return;
@@ -106,9 +133,13 @@ async function handleIncomingMessage(
       return;
     }
 
-    if (isAdminCommandMessage(userMessage) && isAdminNumber(whatsappId)) {
+    const isAdmin = isAdminNumber(whatsappId);
+
+    if (isAdminCommandMessage(userMessage) && isAdmin) {
       try {
-        const reply = await executeAdminCommand(userMessage);
+        const reply = await executeAdminCommandFn(userMessage, {
+          adminWhatsappId: whatsappId,
+        });
         await sendMessageFn(whatsappId, reply);
       } catch (error) {
         console.error('[webhook] Admin command failed:', error);
@@ -118,6 +149,23 @@ async function handleIncomingMessage(
         );
       }
       return;
+    }
+
+    if (!isAdmin) {
+      let isAuthorized;
+
+      try {
+        isAuthorized = await isAuthorizedFn(whatsappId);
+      } catch (error) {
+        console.error('[webhook] Authorization check failed:', error);
+        await sendMessageFn(whatsappId, ACCESS_CHECK_FAILED_MESSAGE);
+        return;
+      }
+
+      if (!isAuthorized) {
+        await sendMessageFn(whatsappId, ACCESS_DENIED_MESSAGE);
+        return;
+      }
     }
 
     sendMessageFn.sendTypingIndicator?.(messageId);

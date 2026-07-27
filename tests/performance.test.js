@@ -8,6 +8,7 @@ function buildTestApp({
   runAgentFn,
   sendMessageFn,
   claimMessageFn,
+  isAuthorizedFn = vi.fn().mockResolvedValue(true),
   appSecret,
   verifyToken = 'perf-verify-token',
 } = {}) {
@@ -27,6 +28,7 @@ function buildTestApp({
       runAgentFn,
       sendMessageFn,
       claimMessageFn,
+      isAuthorizedFn,
       appSecret,
     })
   );
