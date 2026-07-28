@@ -26,36 +26,44 @@ export function runExclusive(key, task) {
   return current;
 }
 
-async function executeWithDistributedLock(key, task) {
-  let ownerId = null;
-
-  try {
-    ownerId = await acquireDistributedLock(key);
-  } catch (error) {
-    if (process.env.NODE_ENV !== 'test') {
-      console.warn(
-        `[keyedQueue] Distributed lock fallback for "${key}":`,
-        error instanceof Error ? error.message : error,
-      );
-    }
+function executeWithDistributedLock(key, task) {
+  if (process.env.NODE_ENV === 'test') {
+    return task();
   }
 
-  try {
-    return await task();
-  } finally {
-    if (ownerId) {
-      await releaseDistributedLock(key, ownerId).catch(() => {});
-    }
-  }
-}
-
-async function acquireDistributedLock(key, ttlMs = 30000, timeoutMs = 25000) {
   let supabase;
   try {
     supabase = getSupabaseClient();
   } catch {
-    return null;
+    supabase = null;
   }
+
+  if (!supabase) {
+    return task();
+  }
+
+  return (async () => {
+    const ownerId = await acquireDistributedLock(key, supabase).catch(
+      (error) => {
+        console.error(
+          `[keyedQueue] Failed to acquire distributed lock for "${key}":`,
+          error instanceof Error ? error.message : error,
+        );
+        throw error;
+      },
+    );
+
+    try {
+      return await task();
+    } finally {
+      if (ownerId) {
+        await releaseDistributedLock(key, ownerId, supabase);
+      }
+    }
+  })();
+}
+
+async function acquireDistributedLock(key, supabase, ttlMs = 30000, timeoutMs = 25000) {
   if (!supabase) return null;
 
   const ownerId = `${process.pid}_${Math.random().toString(36).slice(2, 9)}`;
@@ -65,12 +73,15 @@ async function acquireDistributedLock(key, ttlMs = 30000, timeoutMs = 25000) {
     const nowIso = new Date().toISOString();
     const expiresAtIso = new Date(Date.now() + ttlMs).toISOString();
 
-    await supabase
-      .from('distributed_locks')
-      .delete()
-      .eq('lock_key', key)
-      .lt('expires_at', nowIso)
-      .catch(() => {});
+    try {
+      await supabase
+        .from('distributed_locks')
+        .delete()
+        .eq('lock_key', key)
+        .lt('expires_at', nowIso);
+    } catch {
+      // ignore cleanup errors
+    }
 
     const { error } = await supabase.from('distributed_locks').insert({
       lock_key: key,
@@ -90,12 +101,13 @@ async function acquireDistributedLock(key, ttlMs = 30000, timeoutMs = 25000) {
     throw error;
   }
 
-  throw new Error(`Timeout waiting for distributed lock on key "${key}"`);
+  throw new Error(
+    `Timeout waiting for distributed lock on key "${key}" after ${timeoutMs}ms`,
+  );
 }
 
-async function releaseDistributedLock(key, ownerId) {
+async function releaseDistributedLock(key, ownerId, supabase) {
   try {
-    const supabase = getSupabaseClient();
     if (!supabase) return;
 
     await supabase
@@ -103,7 +115,11 @@ async function releaseDistributedLock(key, ownerId) {
       .delete()
       .eq('lock_key', key)
       .eq('owner_id', ownerId);
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[keyedQueue] Failed to release lock for "${key}":`,
+      error instanceof Error ? error.message : error,
+    );
   }
 }
 

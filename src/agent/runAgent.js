@@ -211,6 +211,7 @@ async function runAgentInternal({ whatsappId, userMessage, model }) {
         );
 
         setCachedConversationHistory(whatsappId, updatedHistory);
+        await flushConversationHistory(whatsappId);
 
         return 'عذرًا، حدث خطأ أثناء معالجة طلبك. من فضلك أعد إرسال سؤالك.';
       }
@@ -222,6 +223,7 @@ async function runAgentInternal({ whatsappId, userMessage, model }) {
       );
 
       setCachedConversationHistory(whatsappId, updatedHistory);
+      await flushConversationHistory(whatsappId);
 
       return replyText;
     }
