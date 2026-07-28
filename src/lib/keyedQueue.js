@@ -2,6 +2,17 @@ import { getSupabaseClient } from '../config/supabaseClient.js';
 
 const tails = new Map();
 
+const DEFAULT_LOCK_TTL_MS = 30_000;
+const DEFAULT_LOCK_WAIT_TIMEOUT_MS = 25_000;
+const DEFAULT_LOCK_POLL_INTERVAL_MS = 100;
+const DEFAULT_LOCK_RENEW_INTERVAL_MS = 10_000;
+
+let clientOverride;
+let lockTtlMs = DEFAULT_LOCK_TTL_MS;
+let lockWaitTimeoutMs = DEFAULT_LOCK_WAIT_TIMEOUT_MS;
+let lockPollIntervalMs = DEFAULT_LOCK_POLL_INTERVAL_MS;
+let lockRenewIntervalMs = DEFAULT_LOCK_RENEW_INTERVAL_MS;
+
 export function runExclusive(key, task) {
   const previousTail = tails.get(key) ?? Promise.resolve();
 
@@ -26,52 +37,50 @@ export function runExclusive(key, task) {
   return current;
 }
 
-function executeWithDistributedLock(key, task) {
-  if (process.env.NODE_ENV === 'test') {
-    return task();
-  }
-
+async function executeWithDistributedLock(key, task) {
   let supabase;
-  try {
-    supabase = getSupabaseClient();
-  } catch {
-    supabase = null;
-  }
 
-  if (!supabase) {
-    return task();
-  }
-
-  return (async () => {
-    const ownerId = await acquireDistributedLock(key, supabase).catch(
-      (error) => {
-        console.error(
-          `[keyedQueue] Failed to acquire distributed lock for "${key}":`,
-          error instanceof Error ? error.message : error,
-        );
-        throw error;
-      },
-    );
-
+  if (clientOverride !== undefined) {
+    supabase = clientOverride;
+  } else {
     try {
-      return await task();
-    } finally {
-      if (ownerId) {
-        await releaseDistributedLock(key, ownerId, supabase);
-      }
+      supabase = getSupabaseClient();
+    } catch {
+      supabase = null;
     }
-  })();
+  }
+
+  if (!supabase) return task();
+
+  const ownerId = await acquireDistributedLock(key, supabase).catch(
+    (error) => {
+      console.error(
+        `[keyedQueue] Failed to acquire distributed lock for "${key}":`,
+        error instanceof Error ? error.message : error,
+      );
+      throw error;
+    },
+  );
+
+  const stopRenewal = startLockRenewal(key, ownerId, supabase);
+
+  try {
+    return await task();
+  } finally {
+    await stopRenewal();
+    await releaseDistributedLock(key, ownerId, supabase);
+  }
 }
 
-async function acquireDistributedLock(key, supabase, ttlMs = 30000, timeoutMs = 25000) {
+async function acquireDistributedLock(key, supabase) {
   if (!supabase) return null;
 
   const ownerId = `${process.pid}_${Math.random().toString(36).slice(2, 9)}`;
   const startTime = Date.now();
 
-  while (Date.now() - startTime < timeoutMs) {
+  while (Date.now() - startTime < lockWaitTimeoutMs) {
     const nowIso = new Date().toISOString();
-    const expiresAtIso = new Date(Date.now() + ttlMs).toISOString();
+    const expiresAtIso = new Date(Date.now() + lockTtlMs).toISOString();
 
     try {
       await supabase
@@ -94,27 +103,86 @@ async function acquireDistributedLock(key, supabase, ttlMs = 30000, timeoutMs = 
     }
 
     if (error.code === '23505') {
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, lockPollIntervalMs);
+      });
       continue;
     }
 
     throw error;
   }
 
-  throw new Error(
-    `Timeout waiting for distributed lock on key "${key}" after ${timeoutMs}ms`,
+  const timeoutError = new Error(
+    `Timeout waiting for distributed lock on key "${key}" after ${lockWaitTimeoutMs}ms`,
   );
+  timeoutError.code = 'DISTRIBUTED_LOCK_TIMEOUT';
+  throw timeoutError;
+}
+
+function startLockRenewal(key, ownerId, supabase) {
+  let stopped = false;
+  let timer = null;
+  let renewalInFlight = Promise.resolve();
+
+  const scheduleRenewal = (delayMs = lockRenewIntervalMs) => {
+    timer = setTimeout(() => {
+      renewalInFlight = renewDistributedLock(key, ownerId, supabase)
+        .catch((error) => {
+          console.error(
+            `[keyedQueue] Failed to renew lock for "${key}":`,
+            error instanceof Error ? error.message : error,
+          );
+        })
+        .finally(() => {
+          if (!stopped) {
+            scheduleRenewal();
+          }
+        });
+    }, delayMs);
+    timer.unref?.();
+  };
+
+  scheduleRenewal();
+
+  return async () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    await renewalInFlight;
+  };
+}
+
+async function renewDistributedLock(key, ownerId, supabase) {
+  const expiresAtIso = new Date(Date.now() + lockTtlMs).toISOString();
+  const { data, error } = await supabase
+    .from('distributed_locks')
+    .update({ expires_at: expiresAtIso })
+    .eq('lock_key', key)
+    .eq('owner_id', ownerId)
+    .select('lock_key')
+    .maybeSingle();
+
+  if (error) throw error;
+
+  if (!data) {
+    const lostLockError = new Error(
+      `Distributed lock for "${key}" is no longer owned by this process.`,
+    );
+    lostLockError.code = 'DISTRIBUTED_LOCK_LOST';
+    throw lostLockError;
+  }
 }
 
 async function releaseDistributedLock(key, ownerId, supabase) {
   try {
     if (!supabase) return;
 
-    await supabase
+    const { error } = await supabase
       .from('distributed_locks')
       .delete()
       .eq('lock_key', key)
       .eq('owner_id', ownerId);
+
+    if (error) throw error;
   } catch (error) {
     console.warn(
       `[keyedQueue] Failed to release lock for "${key}":`,
@@ -127,6 +195,31 @@ export async function drainKeyedQueue() {
   await Promise.allSettled(Array.from(tails.values()));
 }
 
+export function __configureKeyedQueueForTests({
+  supabaseClient,
+  ttlMs,
+  waitTimeoutMs,
+  pollIntervalMs,
+  renewIntervalMs,
+} = {}) {
+  if (supabaseClient !== undefined) clientOverride = supabaseClient;
+  if (typeof ttlMs === 'number') lockTtlMs = ttlMs;
+  if (typeof waitTimeoutMs === 'number') {
+    lockWaitTimeoutMs = waitTimeoutMs;
+  }
+  if (typeof pollIntervalMs === 'number') {
+    lockPollIntervalMs = pollIntervalMs;
+  }
+  if (typeof renewIntervalMs === 'number') {
+    lockRenewIntervalMs = renewIntervalMs;
+  }
+}
+
 export function __resetKeyedQueueForTests() {
   tails.clear();
+  clientOverride = undefined;
+  lockTtlMs = DEFAULT_LOCK_TTL_MS;
+  lockWaitTimeoutMs = DEFAULT_LOCK_WAIT_TIMEOUT_MS;
+  lockPollIntervalMs = DEFAULT_LOCK_POLL_INTERVAL_MS;
+  lockRenewIntervalMs = DEFAULT_LOCK_RENEW_INTERVAL_MS;
 }

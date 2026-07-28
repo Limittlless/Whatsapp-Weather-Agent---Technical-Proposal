@@ -273,6 +273,29 @@ describe('createCloudApiWebhookRouter', () => {
       expect(response.status).toBe(200);
     });
 
+    it('sends a retry reply when the agent task fails', async () => {
+      const runAgentFn = vi
+        .fn()
+        .mockRejectedValue(new Error('lock timeout'));
+      const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+      const claimMessageFn = vi.fn().mockResolvedValue(true);
+      const app = buildTestApp({
+        runAgentFn,
+        sendMessageFn,
+        claimMessageFn,
+      });
+
+      await request(app)
+        .post('/webhook')
+        .send(createTextPayload({ id: 'lock-timeout-1' }));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(sendMessageFn).toHaveBeenCalledTimes(1);
+      expect(sendMessageFn.mock.calls[0][1]).toContain(
+        'Please try again shortly',
+      );
+    });
+
     it('skips the agent when claimMessageFn reports a duplicate', async () => {
       const runAgentFn = vi.fn();
       const sendMessageFn = vi.fn();

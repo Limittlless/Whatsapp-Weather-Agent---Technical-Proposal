@@ -17,6 +17,10 @@ const ACCESS_CHECK_FAILED_MESSAGE =
   '⚠️ تعذر التحقق من صلاحية الوصول الآن. حاول مرة أخرى لاحقًا.\n' +
   'Could not verify access right now. Please try again later.';
 
+const PROCESSING_FAILED_MESSAGE =
+  'تعذر معالجة رسالتك الآن. حاول مرة أخرى بعد قليل.\n' +
+  'Could not process your message right now. Please try again shortly.';
+
 export function createCloudApiWebhookRouter({
   verifyToken,
   runAgentFn = defaultRunAgent,
@@ -188,5 +192,14 @@ async function handleIncomingMessage(
       '[webhook] Failed to process an incoming message:',
       error
     );
+
+    try {
+      await sendMessageFn(whatsappId, PROCESSING_FAILED_MESSAGE);
+    } catch (sendError) {
+      console.error(
+        '[webhook] Failed to send the processing-error reply:',
+        sendError
+      );
+    }
   }
 }

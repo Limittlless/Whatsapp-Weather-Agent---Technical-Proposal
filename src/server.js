@@ -45,7 +45,6 @@ function buildApp() {
 }
 
 function buildExpress(webhookRouter) {
-
   const app = express();
 
   app.set('trust proxy', 1);
@@ -83,6 +82,22 @@ function buildExpress(webhookRouter) {
   return app;
 }
 
+function closeHttpServer(server) {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+
+    if (typeof server.closeIdleConnections === 'function') {
+      server.closeIdleConnections();
+    }
+  });
+}
+
 const isRunDirectly =
   process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 
@@ -107,10 +122,11 @@ if (isRunDirectly) {
     }, 10_000);
     forceExitTimer.unref?.();
 
-    if (typeof server.closeIdleConnections === 'function') {
-      server.closeIdleConnections();
+    try {
+      await closeHttpServer(server);
+    } catch (error) {
+      console.error('[server] Failed to close HTTP server:', error);
     }
-    server.close();
 
     try {
       await webhookRouter.drain();
@@ -136,4 +152,4 @@ if (isRunDirectly) {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-export { buildApp };
+export { buildApp, closeHttpServer };

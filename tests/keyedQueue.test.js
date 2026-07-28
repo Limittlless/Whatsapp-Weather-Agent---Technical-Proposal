@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import {
   runExclusive,
+  __configureKeyedQueueForTests,
   __resetKeyedQueueForTests,
 } from '../src/lib/keyedQueue.js';
 
@@ -13,8 +14,50 @@ function deferred() {
   return { promise, resolve };
 }
 
+function resolvedQuery(result = { data: null, error: null }) {
+  const promise = Promise.resolve(result);
+  const query = {
+    eq: () => query,
+    lt: () => query,
+    select: () => query,
+    maybeSingle: () => promise,
+    then: (onFulfilled, onRejected) =>
+      promise.then(onFulfilled, onRejected),
+  };
+  return query;
+}
+
+function createFakeLockClient({ insertError = null } = {}) {
+  const deleteLock = vi.fn(() => resolvedQuery());
+  const insertLock = vi.fn().mockResolvedValue({ error: insertError });
+  const renewLock = vi.fn(() =>
+    resolvedQuery({
+      data: { lock_key: 'user-1' },
+      error: null,
+    }),
+  );
+  const from = vi.fn(() => ({
+    delete: deleteLock,
+    insert: insertLock,
+    update: renewLock,
+  }));
+
+  return {
+    client: { from },
+    deleteLock,
+    insertLock,
+    renewLock,
+  };
+}
+
 describe('runExclusive', () => {
   beforeEach(() => {
+    __resetKeyedQueueForTests();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     __resetKeyedQueueForTests();
   });
 
@@ -118,5 +161,66 @@ describe('runExclusive', () => {
     await drainPromise;
 
     expect(drained).toBe(true);
+  });
+
+  it('does not run the task when the distributed lock cannot be acquired', async () => {
+    const backendError = {
+      code: 'LOCK_BACKEND_DOWN',
+      message: 'lock service unavailable',
+    };
+    const { client } = createFakeLockClient({
+      insertError: backendError,
+    });
+    const task = vi.fn();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    __configureKeyedQueueForTests({ supabaseClient: client });
+
+    await expect(runExclusive('user-1', task)).rejects.toBe(backendError);
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it('times out without running the task when another process holds the lock', async () => {
+    vi.useFakeTimers();
+    const { client } = createFakeLockClient({
+      insertError: { code: '23505', message: 'duplicate key' },
+    });
+    const task = vi.fn();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    __configureKeyedQueueForTests({
+      supabaseClient: client,
+      waitTimeoutMs: 10,
+      pollIntervalMs: 2,
+    });
+
+    const run = runExclusive('user-1', task);
+    const rejection = expect(run).rejects.toMatchObject({
+      code: 'DISTRIBUTED_LOCK_TIMEOUT',
+    });
+
+    await vi.advanceTimersByTimeAsync(20);
+    await rejection;
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it('renews the distributed lock while a long task is running', async () => {
+    vi.useFakeTimers();
+    const { client, deleteLock, insertLock, renewLock } =
+      createFakeLockClient();
+    const longTask = deferred();
+    __configureKeyedQueueForTests({
+      supabaseClient: client,
+      ttlMs: 30,
+      renewIntervalMs: 5,
+    });
+
+    const run = runExclusive('user-1', () => longTask.promise);
+    await vi.advanceTimersByTimeAsync(6);
+
+    expect(insertLock).toHaveBeenCalledTimes(1);
+    expect(renewLock).toHaveBeenCalled();
+
+    longTask.resolve('done');
+    await expect(run).resolves.toBe('done');
+    expect(deleteLock.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });

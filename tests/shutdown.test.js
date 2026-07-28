@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-
 vi.mock('../src/agent/runAgent.js', () => ({ runAgent: vi.fn() }));
 vi.mock('../src/services/processedMessages.js', () => ({
   claimMessage: vi.fn().mockResolvedValue(true),
@@ -20,7 +19,7 @@ vi.mock('../src/services/adminCommands.js', () => ({
 }));
 
 import { createCloudApiWebhookRouter } from '../src/gateways/cloudApiWebhook.js';
-
+import { closeHttpServer } from '../src/server.js';
 
 function deferred() {
   let resolve;
@@ -178,5 +177,30 @@ describe('cloudApiWebhookRouter.drain()', () => {
 
     const results = await router.drain();
     expect(results).toEqual([]);
+  });
+});
+
+describe('closeHttpServer', () => {
+  it('waits for active HTTP requests to finish', async () => {
+    let closeCallback;
+    const server = {
+      close: vi.fn((callback) => {
+        closeCallback = callback;
+      }),
+      closeIdleConnections: vi.fn(),
+    };
+
+    let closed = false;
+    const closePromise = closeHttpServer(server).then(() => {
+      closed = true;
+    });
+
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    expect(server.closeIdleConnections).toHaveBeenCalledTimes(1);
+
+    closeCallback();
+    await closePromise;
+    expect(closed).toBe(true);
   });
 });

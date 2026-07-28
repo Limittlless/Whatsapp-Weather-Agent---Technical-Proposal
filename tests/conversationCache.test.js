@@ -193,8 +193,8 @@ describe('conversationCache', () => {
 
   it('flushAllConversationCache rejects with an aggregated error when any flush fails', async () => {
     saveConversationHistory
-      .mockResolvedValueOnce(undefined) 
-      .mockRejectedValueOnce(new Error('quota exceeded')); 
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('quota exceeded'));
 
     setCachedConversationHistory('user-a', [{ role: 'user', content: 'a' }]);
     setCachedConversationHistory('user-b', [{ role: 'user', content: 'b' }]);
