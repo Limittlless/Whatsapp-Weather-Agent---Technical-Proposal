@@ -191,6 +191,83 @@ describe('conversationCache', () => {
     ).rejects.toThrow('last save attempt was unsuccessful');
   });
 
+  it('does not replace dirty local history during a forced refresh', async () => {
+    getConversationHistory.mockResolvedValue([]);
+    await getCachedConversationHistory('212600000000');
+    saveConversationHistory.mockRejectedValue(new Error('disk full'));
+
+    const unsavedHistory = [{ role: 'user', content: 'keep this message' }];
+    setCachedConversationHistory('212600000000', unsavedHistory);
+    await expect(
+      flushConversationHistory('212600000000'),
+    ).rejects.toThrow('last save attempt was unsuccessful');
+
+    getConversationHistory.mockResolvedValue([]);
+
+    const history = await getCachedConversationHistory('212600000000', {
+      forceRefresh: true,
+    });
+
+    expect(history).toEqual(unsavedHistory);
+    expect(getConversationHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not overwrite newer stored history with a stale dirty cache', async () => {
+    getConversationHistory.mockResolvedValue([]);
+    await getCachedConversationHistory('212600000000');
+    saveConversationHistory.mockRejectedValue(new Error('network down'));
+
+    setCachedConversationHistory('212600000000', [
+      { role: 'user', content: 'unsaved local message' },
+    ]);
+    await expect(
+      flushConversationHistory('212600000000'),
+    ).rejects.toThrow('last save attempt was unsuccessful');
+
+    const newerStoredHistory = [
+      { role: 'user', content: 'message saved by another app instance' },
+    ];
+    getConversationHistory.mockResolvedValue(newerStoredHistory);
+
+    const history = await getCachedConversationHistory('212600000000', {
+      forceRefresh: true,
+    });
+
+    expect(history).toEqual(newerStoredHistory);
+    expect(trackError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          stage: 'dirtyRefreshConflict',
+        }),
+      }),
+    );
+
+    const saveAttempts = saveConversationHistory.mock.calls.length;
+    await flushConversationHistory('212600000000');
+    expect(saveConversationHistory).toHaveBeenCalledTimes(saveAttempts);
+  });
+
+  it('passes the active distributed lock to the history store', async () => {
+    const lock = {
+      key: '212600000000',
+      ownerId: 'owner-1',
+      assertLockHeld: vi.fn(),
+    };
+
+    setCachedConversationHistory(
+      '212600000000',
+      [{ role: 'user', content: 'hi' }],
+      { lock },
+    );
+    await flushConversationHistory('212600000000');
+
+    expect(saveConversationHistory).toHaveBeenCalledWith(
+      '212600000000',
+      [{ role: 'user', content: 'hi' }],
+      { lock },
+    );
+  });
+
   it('flushAllConversationCache rejects with an aggregated error when any flush fails', async () => {
     saveConversationHistory
       .mockResolvedValueOnce(undefined)

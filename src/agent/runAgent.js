@@ -94,20 +94,22 @@ export async function runAgent({ whatsappId, userMessage, model }) {
     throw new Error('whatsappId is required.');
   }
 
-  return runExclusive(whatsappId, () =>
-    runAgentInternal({ whatsappId, userMessage, model }),
+  return runExclusive(whatsappId, (lock) =>
+    runAgentInternal({ whatsappId, userMessage, model, lock }),
   );
 }
 
-async function runAgentInternal({ whatsappId, userMessage, model }) {
+async function runAgentInternal({ whatsappId, userMessage, model, lock }) {
   let messages;
 
   try {
+    lock.assertLockHeld();
     const activeModel = model ?? createGeminiModel();
 
     const storedHistory = await getCachedConversationHistory(whatsappId, {
       forceRefresh: true,
     });
+    lock.assertLockHeld();
 
     const preparedHistory = prepareConversationHistory(
       storedHistory,
@@ -127,7 +129,9 @@ async function runAgentInternal({ whatsappId, userMessage, model }) {
         async () => {
           attemptsMade += 1;
           try {
-            const result = await activeModel.invoke(messages);
+            const result = await activeModel.invoke(messages, {
+              signal: lock.signal,
+            });
             recordGeminiCall({ ok: true });
             return result;
           } catch (error) {
@@ -139,7 +143,8 @@ async function runAgentInternal({ whatsappId, userMessage, model }) {
           maxAttempts: GEMINI_MAX_ATTEMPTS,
           baseDelayMs: GEMINI_BASE_DELAY_MS,
           maxDelayMs: GEMINI_MAX_DELAY_MS,
-          isRetryable: isGeminiErrorRetryable,
+          isRetryable: (error) =>
+            !lock.signal?.aborted && isGeminiErrorRetryable(error),
           onRetry: ({ error, willRetry }) => {
             if (willRetry) {
               console.warn(
@@ -160,6 +165,7 @@ async function runAgentInternal({ whatsappId, userMessage, model }) {
           });
           throw error;
         });
+      lock.assertLockHeld();
 
       const toolCalls = aiMessage.tool_calls ?? [];
 
@@ -169,6 +175,7 @@ async function runAgentInternal({ whatsappId, userMessage, model }) {
         const toolMessages = await Promise.all(
           toolCalls.map((toolCall) => executeToolCall(toolCall)),
         );
+        lock.assertLockHeld();
 
         messages.push(...toolMessages);
 
@@ -186,6 +193,7 @@ async function runAgentInternal({ whatsappId, userMessage, model }) {
         messages.push(new AIMessage('One moment, let me check that.'));
 
         const toolMessage = await executeToolCall(recoveredCall);
+        lock.assertLockHeld();
 
         messages.push(
           new HumanMessage(
@@ -210,8 +218,10 @@ async function runAgentInternal({ whatsappId, userMessage, model }) {
           messages.map(toStoredMessage),
         );
 
-        setCachedConversationHistory(whatsappId, updatedHistory);
+        lock.assertLockHeld();
+        setCachedConversationHistory(whatsappId, updatedHistory, { lock });
         await flushConversationHistory(whatsappId);
+        lock.assertLockHeld();
 
         return 'عذرًا، حدث خطأ أثناء معالجة طلبك. من فضلك أعد إرسال سؤالك.';
       }
@@ -222,8 +232,10 @@ async function runAgentInternal({ whatsappId, userMessage, model }) {
         messages.map(toStoredMessage),
       );
 
-      setCachedConversationHistory(whatsappId, updatedHistory);
+      lock.assertLockHeld();
+      setCachedConversationHistory(whatsappId, updatedHistory, { lock });
       await flushConversationHistory(whatsappId);
+      lock.assertLockHeld();
 
       return replyText;
     }
@@ -231,7 +243,14 @@ async function runAgentInternal({ whatsappId, userMessage, model }) {
     throw new Error(
       `Agent exceeded the maximum of ${MAX_ITERATIONS} iterations.`,
     );
-  } catch (error) {
+  } catch (caughtError) {
+    let error = caughtError;
+    try {
+      lock.assertLockHeld();
+    } catch (lockError) {
+      error = lockError;
+    }
+
     console.error('[agent] Execution failed:', error);
 
     trackError({
@@ -241,14 +260,20 @@ async function runAgentInternal({ whatsappId, userMessage, model }) {
       context: { whatsappId },
     });
 
+    if (error?.code === 'DISTRIBUTED_LOCK_LOST') {
+      throw error;
+    }
+
     if (Array.isArray(messages) && messages.length > 0) {
       try {
         const updatedHistory = pruneHistory(
           messages.map(toStoredMessage),
         );
 
-        setCachedConversationHistory(whatsappId, updatedHistory);
+        lock.assertLockHeld();
+        setCachedConversationHistory(whatsappId, updatedHistory, { lock });
         await flushConversationHistory(whatsappId);
+        lock.assertLockHeld();
       } catch (saveError) {
         console.error(
           '[agent] Failed to save conversation history after an error:',

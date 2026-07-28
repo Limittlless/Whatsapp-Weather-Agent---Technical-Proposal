@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util';
+
 import {
   getConversationHistory,
   saveConversationHistory,
@@ -17,9 +19,11 @@ function getOrCreateEntry(whatsappId, initialHistory) {
   if (!entry) {
     entry = {
       history: initialHistory,
+      persistedHistory: initialHistory,
       dirty: false,
       lastAccessAt: Date.now(),
       flushInFlight: false,
+      lock: null,
     };
     cache.set(whatsappId, entry);
   }
@@ -37,18 +41,53 @@ export async function getCachedConversationHistory(
     return cached.history;
   }
 
+  if (cached?.flushInFlight) {
+    while (cached.flushInFlight) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
   const history = await getConversationHistory(whatsappId);
   const entry = getOrCreateEntry(whatsappId, history);
+
+  if (entry.dirty) {
+    if (isDeepStrictEqual(history, entry.history)) {
+      entry.persistedHistory = history;
+      entry.dirty = false;
+      entry.lock = null;
+    } else if (isDeepStrictEqual(history, entry.persistedHistory)) {
+      entry.lastAccessAt = Date.now();
+      return entry.history;
+    } else {
+      trackError({
+        service: 'conversationCache',
+        severity: 'warning',
+        error: new Error(
+          `Discarded stale dirty cache for "${whatsappId}" because the stored history changed.`,
+        ),
+        context: { whatsappId, stage: 'dirtyRefreshConflict' },
+      });
+      entry.dirty = false;
+      entry.lock = null;
+    }
+  }
+
   entry.history = history;
+  entry.persistedHistory = history;
   entry.lastAccessAt = Date.now();
   return entry.history;
 }
 
-export function setCachedConversationHistory(whatsappId, history) {
+export function setCachedConversationHistory(
+  whatsappId,
+  history,
+  { lock = null } = {},
+) {
   const entry = getOrCreateEntry(whatsappId, history);
   entry.history = history;
   entry.dirty = true;
   entry.lastAccessAt = Date.now();
+  entry.lock = lock;
 
   if (!entry.flushInFlight) {
     drainFlush(whatsappId, entry);
@@ -63,10 +102,18 @@ async function drainFlush(whatsappId, entry) {
   try {
     while (entry.dirty) {
       const historyToPersist = entry.history;
+      const lockToPersist = entry.lock;
       entry.dirty = false;
 
       try {
-        await saveConversationHistory(whatsappId, historyToPersist);
+        if (lockToPersist) {
+          await saveConversationHistory(whatsappId, historyToPersist, {
+            lock: lockToPersist,
+          });
+        } else {
+          await saveConversationHistory(whatsappId, historyToPersist);
+        }
+        entry.persistedHistory = historyToPersist;
       } catch (error) {
         entry.dirty = true;
         trackError({
@@ -77,6 +124,10 @@ async function drainFlush(whatsappId, entry) {
         });
         break;
       }
+    }
+
+    if (!entry.dirty) {
+      entry.lock = null;
     }
   } finally {
     entry.flushInFlight = false;

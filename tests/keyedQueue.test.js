@@ -27,15 +27,16 @@ function resolvedQuery(result = { data: null, error: null }) {
   return query;
 }
 
-function createFakeLockClient({ insertError = null } = {}) {
+function createFakeLockClient({
+  insertError = null,
+  renewResult = {
+    data: { lock_key: 'user-1' },
+    error: null,
+  },
+} = {}) {
   const deleteLock = vi.fn(() => resolvedQuery());
   const insertLock = vi.fn().mockResolvedValue({ error: insertError });
-  const renewLock = vi.fn(() =>
-    resolvedQuery({
-      data: { lock_key: 'user-1' },
-      error: null,
-    }),
-  );
+  const renewLock = vi.fn(() => resolvedQuery(renewResult));
   const from = vi.fn(() => ({
     delete: deleteLock,
     insert: insertLock,
@@ -222,5 +223,37 @@ describe('runExclusive', () => {
     longTask.resolve('done');
     await expect(run).resolves.toBe('done');
     expect(deleteLock.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('stops a task from continuing after lock renewal loses ownership', async () => {
+    vi.useFakeTimers();
+    const { client } = createFakeLockClient({
+      renewResult: { data: null, error: null },
+    });
+    const protectedWork = vi.fn();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    __configureKeyedQueueForTests({
+      supabaseClient: client,
+      ttlMs: 30,
+      renewIntervalMs: 5,
+    });
+
+    const run = runExclusive(
+      'user-1',
+      async ({ signal, assertLockHeld }) => {
+        await new Promise((resolve) => {
+          signal.addEventListener('abort', resolve, { once: true });
+        });
+        assertLockHeld();
+        protectedWork();
+      },
+    );
+    const rejection = expect(run).rejects.toMatchObject({
+      code: 'DISTRIBUTED_LOCK_LOST',
+    });
+
+    await vi.advanceTimersByTimeAsync(6);
+    await rejection;
+    expect(protectedWork).not.toHaveBeenCalled();
   });
 });

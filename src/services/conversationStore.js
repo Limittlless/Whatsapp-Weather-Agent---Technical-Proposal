@@ -45,13 +45,47 @@ export async function getConversationHistory(whatsappId) {
   return validation.data;
 }
 
-export async function saveConversationHistory(whatsappId, history) {
+export async function saveConversationHistory(
+  whatsappId,
+  history,
+  { lock } = {},
+) {
   assertWhatsappId(whatsappId);
   const validation = historySchema.safeParse(history);
   if (!validation.success) {
     throw new Error('Cannot save malformed conversation history.');
   }
   const supabase = getSupabaseClient();
+
+  if (lock?.key && lock?.ownerId) {
+    lock.assertLockHeld?.();
+
+    try {
+      await withSupabaseRetry(
+        () =>
+          supabase.rpc('save_conversation_history_with_lock', {
+            p_whatsapp_id: whatsappId,
+            p_history: validation.data,
+            p_lock_key: lock.key,
+            p_lock_owner_id: lock.ownerId,
+          }),
+        {
+          operation: 'saveConversationHistoryWithLock',
+          context: { whatsappId },
+        },
+      );
+    } catch (error) {
+      if (
+        error?.cause?.code === 'P0001' &&
+        error.cause?.message?.includes('Distributed lock')
+      ) {
+        error.code = 'DISTRIBUTED_LOCK_LOST';
+      }
+      throw error;
+    }
+
+    return;
+  }
 
   await withSupabaseRetry(
     () =>

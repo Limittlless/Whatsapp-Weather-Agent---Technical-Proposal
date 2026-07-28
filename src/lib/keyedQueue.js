@@ -13,6 +13,13 @@ let lockWaitTimeoutMs = DEFAULT_LOCK_WAIT_TIMEOUT_MS;
 let lockPollIntervalMs = DEFAULT_LOCK_POLL_INTERVAL_MS;
 let lockRenewIntervalMs = DEFAULT_LOCK_RENEW_INTERVAL_MS;
 
+const unlockedContext = Object.freeze({
+  key: null,
+  ownerId: null,
+  signal: undefined,
+  assertLockHeld() {},
+});
+
 export function runExclusive(key, task) {
   const previousTail = tails.get(key) ?? Promise.resolve();
 
@@ -50,7 +57,7 @@ async function executeWithDistributedLock(key, task) {
     }
   }
 
-  if (!supabase) return task();
+  if (!supabase) return task(unlockedContext);
 
   const ownerId = await acquireDistributedLock(key, supabase).catch(
     (error) => {
@@ -62,13 +69,17 @@ async function executeWithDistributedLock(key, task) {
     },
   );
 
-  const stopRenewal = startLockRenewal(key, ownerId, supabase);
+  const lease = startLockRenewal(key, ownerId, supabase);
+  const taskPromise = Promise.resolve().then(() => task(lease.context));
 
   try {
-    return await task();
+    return await Promise.race([taskPromise, lease.lost]);
   } finally {
-    await stopRenewal();
-    await releaseDistributedLock(key, ownerId, supabase);
+    try {
+      await lease.stop();
+    } finally {
+      await releaseDistributedLock(key, ownerId, supabase);
+    }
   }
 }
 
@@ -123,6 +134,21 @@ function startLockRenewal(key, ownerId, supabase) {
   let stopped = false;
   let timer = null;
   let renewalInFlight = Promise.resolve();
+  let lockError = null;
+  let rejectLost;
+  const abortController = new AbortController();
+  const lost = new Promise((_, reject) => {
+    rejectLost = reject;
+  });
+
+  const markLockLost = (error) => {
+    if (lockError) return;
+
+    lockError = error;
+    stopped = true;
+    abortController.abort(error);
+    rejectLost(error);
+  };
 
   const scheduleRenewal = (delayMs = lockRenewIntervalMs) => {
     timer = setTimeout(() => {
@@ -132,6 +158,8 @@ function startLockRenewal(key, ownerId, supabase) {
             `[keyedQueue] Failed to renew lock for "${key}":`,
             error instanceof Error ? error.message : error,
           );
+          markLockLost(error);
+          throw error;
         })
         .finally(() => {
           if (!stopped) {
@@ -144,10 +172,21 @@ function startLockRenewal(key, ownerId, supabase) {
 
   scheduleRenewal();
 
-  return async () => {
-    stopped = true;
-    if (timer) clearTimeout(timer);
-    await renewalInFlight;
+  return {
+    context: Object.freeze({
+      key,
+      ownerId,
+      signal: abortController.signal,
+      assertLockHeld() {
+        if (lockError) throw lockError;
+      },
+    }),
+    lost,
+    async stop() {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      await renewalInFlight;
+    },
   };
 }
 
