@@ -7,6 +7,7 @@ import rateLimit from 'express-rate-limit';
 
 import { createCloudApiWebhookRouter } from './gateways/cloudApiWebhook.js';
 import { createCloudApiSender } from './gateways/cloudApiClient.js';
+import { flushAllConversationCache } from './services/conversationCache.js';
 import { configureErrorTracker } from './services/errorTracker.js';
 
 const PORT = process.env.PORT || 3000;
@@ -90,7 +91,15 @@ if (isRunDirectly) {
   const shutdown = (signal) => {
     console.log(`[server] Received ${signal}, shutting down gracefully...`);
 
-    server.close(() => {
+    server.close(async () => {
+      try {
+        await flushAllConversationCache();
+      } catch (error) {
+        console.error(
+          '[server] Failed to flush conversation cache during shutdown:',
+          error,
+        );
+      }
       console.log('[server] Closed all connections. Exiting.');
       process.exit(0);
     });

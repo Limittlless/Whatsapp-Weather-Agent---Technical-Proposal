@@ -1,11 +1,13 @@
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 
 import { createGeminiModel } from '../config/geminiClient.js';
+import { runExclusive } from '../lib/keyedQueue.js';
 import { withRetry, defaultIsRetryable } from '../lib/retry.js';
 import {
-  getConversationHistory,
-  saveConversationHistory,
-} from '../services/conversationStore.js';
+  flushConversationHistory,
+  getCachedConversationHistory,
+  setCachedConversationHistory,
+} from '../services/conversationCache.js';
 import { trackError } from '../services/errorTracker.js';
 import { pruneHistory } from '../services/pruneHistory.js';
 import { recordGeminiCall } from '../services/usageMetrics.js';
@@ -87,22 +89,24 @@ function isDegenerateReply(content) {
   return false;
 }
 
-export async function runAgent({
-  whatsappId,
-  userMessage,
-  model,
-}) {
+export async function runAgent({ whatsappId, userMessage, model }) {
   if (!whatsappId?.trim()) {
     throw new Error('whatsappId is required.');
   }
 
+  return runExclusive(whatsappId, () =>
+    runAgentInternal({ whatsappId, userMessage, model }),
+  );
+}
+
+async function runAgentInternal({ whatsappId, userMessage, model }) {
   let messages;
 
   try {
     const activeModel = model ?? createGeminiModel();
 
     const storedHistory =
-      await getConversationHistory(whatsappId);
+      await getCachedConversationHistory(whatsappId);
 
     const preparedHistory = prepareConversationHistory(
       storedHistory,
@@ -205,14 +209,7 @@ export async function runAgent({
           messages.map(toStoredMessage),
         );
 
-        saveConversationHistory(whatsappId, updatedHistory).catch(
-          (saveError) => {
-            console.error(
-              '[agent] Failed to save conversation history:',
-              saveError,
-            );
-          },
-        );
+        setCachedConversationHistory(whatsappId, updatedHistory);
 
         return 'عذرًا، حدث خطأ أثناء معالجة طلبك. من فضلك أعد إرسال سؤالك.';
       }
@@ -223,14 +220,7 @@ export async function runAgent({
         messages.map(toStoredMessage),
       );
 
-      saveConversationHistory(whatsappId, updatedHistory).catch(
-        (saveError) => {
-          console.error(
-            '[agent] Failed to save conversation history:',
-            saveError,
-          );
-        },
-      );
+      setCachedConversationHistory(whatsappId, updatedHistory);
 
       return replyText;
     }
@@ -254,7 +244,8 @@ export async function runAgent({
           messages.map(toStoredMessage),
         );
 
-        await saveConversationHistory(whatsappId, updatedHistory);
+        setCachedConversationHistory(whatsappId, updatedHistory);
+        await flushConversationHistory(whatsappId);
       } catch (saveError) {
         console.error(
           '[agent] Failed to save conversation history after an error:',
