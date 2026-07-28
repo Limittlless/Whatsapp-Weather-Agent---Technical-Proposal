@@ -93,4 +93,30 @@ describe('runExclusive', () => {
     await expect(okRun).resolves.toBe('ok');
     await expect(failRun).rejects.toThrow('nope');
   });
+
+  it('drainKeyedQueue waits for all active and queued tasks to settle', async () => {
+    const d1 = deferred();
+    const d2 = deferred();
+
+    const p1 = runExclusive('key-1', () => d1.promise);
+    const p2 = runExclusive('key-2', () => d2.promise);
+
+    let drained = false;
+    const drainPromise = (async () => {
+      const { drainKeyedQueue } = await import('../src/lib/keyedQueue.js');
+      await drainKeyedQueue();
+      drained = true;
+    })();
+
+    await Promise.resolve();
+    expect(drained).toBe(false);
+
+    d1.resolve('v1');
+    d2.resolve('v2');
+
+    await Promise.all([p1, p2]);
+    await drainPromise;
+
+    expect(drained).toBe(true);
+  });
 });

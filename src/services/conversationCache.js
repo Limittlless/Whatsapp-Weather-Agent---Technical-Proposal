@@ -26,16 +26,20 @@ function getOrCreateEntry(whatsappId, initialHistory) {
   return entry;
 }
 
-export async function getCachedConversationHistory(whatsappId) {
+export async function getCachedConversationHistory(
+  whatsappId,
+  { forceRefresh = false } = {},
+) {
   const cached = cache.get(whatsappId);
 
-  if (cached) {
+  if (cached && !forceRefresh) {
     cached.lastAccessAt = Date.now();
     return cached.history;
   }
 
   const history = await getConversationHistory(whatsappId);
   const entry = getOrCreateEntry(whatsappId, history);
+  entry.history = history;
   entry.lastAccessAt = Date.now();
   return entry.history;
 }

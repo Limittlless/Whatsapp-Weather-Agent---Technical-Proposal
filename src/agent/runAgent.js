@@ -105,8 +105,9 @@ async function runAgentInternal({ whatsappId, userMessage, model }) {
   try {
     const activeModel = model ?? createGeminiModel();
 
-    const storedHistory =
-      await getCachedConversationHistory(whatsappId);
+    const storedHistory = await getCachedConversationHistory(whatsappId, {
+      forceRefresh: true,
+    });
 
     const preparedHistory = prepareConversationHistory(
       storedHistory,
