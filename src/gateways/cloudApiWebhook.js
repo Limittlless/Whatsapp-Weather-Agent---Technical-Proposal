@@ -17,6 +17,10 @@ const ACCESS_CHECK_FAILED_MESSAGE =
   '⚠️ تعذر التحقق من صلاحية الوصول الآن. حاول مرة أخرى لاحقًا.\n' +
   'Could not verify access right now. Please try again later.';
 
+const PROCESSING_FAILED_MESSAGE =
+  'تعذر معالجة رسالتك الآن. حاول مرة أخرى بعد قليل.\n' +
+  'Could not process your message right now. Please try again shortly.';
+
 export function createCloudApiWebhookRouter({
   verifyToken,
   runAgentFn = defaultRunAgent,
@@ -41,6 +45,8 @@ export function createCloudApiWebhookRouter({
   const router = Router();
   const verifyMetaSignature = createMetaSignatureVerifier(appSecret);
 
+  const activeTasks = new Set();
+
   router.get('/', (req, res) => {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
@@ -56,20 +62,29 @@ export function createCloudApiWebhookRouter({
 
   router.post('/', verifyMetaSignature, (req, res) => {
     const entries = req.body?.entry ?? [];
+
     res.sendStatus(200);
 
-    setTimeout(() => {
-      processIncomingEntries(entries, {
-        runAgentFn,
-        sendMessageFn,
-        claimMessageFn,
-        isAuthorizedFn,
-        executeAdminCommandFn,
-      }).catch((error) => {
+    const task = new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    })
+      .then(() =>
+        processIncomingEntries(entries, {
+          runAgentFn,
+          sendMessageFn,
+          claimMessageFn,
+          isAuthorizedFn,
+          executeAdminCommandFn,
+        }),
+      )
+      .catch((error) => {
         console.error('[webhook] Failed to process webhook payload:', error);
       });
-    }, 0);
+
+    activeTasks.add(task);
+    task.finally(() => activeTasks.delete(task));
   });
+  router.drain = () => Promise.allSettled(Array.from(activeTasks));
 
   return router;
 }
@@ -177,5 +192,14 @@ async function handleIncomingMessage(
       '[webhook] Failed to process an incoming message:',
       error
     );
+
+    try {
+      await sendMessageFn(whatsappId, PROCESSING_FAILED_MESSAGE);
+    } catch (sendError) {
+      console.error(
+        '[webhook] Failed to send the processing-error reply:',
+        sendError
+      );
+    }
   }
 }

@@ -1,19 +1,27 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const { mockFrom, mockSelect, mockEq, mockMaybeSingle, mockUpsert } =
+const { mockFrom, mockSelect, mockEq, mockMaybeSingle, mockUpsert, mockRpc } =
   vi.hoisted(() => {
     const mockMaybeSingle = vi.fn();
     const mockEq = vi.fn(() => ({ maybeSingle: mockMaybeSingle }));
     const mockSelect = vi.fn(() => ({ eq: mockEq }));
     const mockUpsert = vi.fn();
+    const mockRpc = vi.fn();
     const mockFrom = vi.fn(() => ({
       select: mockSelect,
       upsert: mockUpsert,
     }));
-    return { mockFrom, mockSelect, mockEq, mockMaybeSingle, mockUpsert };
+    return {
+      mockFrom,
+      mockSelect,
+      mockEq,
+      mockMaybeSingle,
+      mockUpsert,
+      mockRpc,
+    };
   });
 vi.mock('../src/config/supabaseClient.js', () => ({
-  getSupabaseClient: () => ({ from: mockFrom }),
+  getSupabaseClient: () => ({ from: mockFrom, rpc: mockRpc }),
   withSupabaseRetry: async (queryFn, { operation } = {}) => {
     let lastError;
 
@@ -29,9 +37,11 @@ vi.mock('../src/config/supabaseClient.js', () => ({
       }
     }
 
-    throw new Error(
+    const error = new Error(
       `Supabase operation "${operation}" failed: ${lastError.message}`
     );
+    error.cause = lastError;
+    throw error;
   },
 }));
 
@@ -46,6 +56,7 @@ describe('conversationStore', () => {
     mockEq.mockClear();
     mockMaybeSingle.mockReset();
     mockUpsert.mockReset();
+    mockRpc.mockReset();
   });
   afterEach(() => {
     process.env = { ...ORIGINAL_ENV };
@@ -155,6 +166,59 @@ describe('conversationStore', () => {
         { whatsapp_id: '9715551234', history },
         { onConflict: 'whatsapp_id' }
       );
+    });
+    it('uses the lock-checked database function when a lock is provided', async () => {
+      mockRpc.mockResolvedValue({ error: null });
+      const { saveConversationHistory } = await import(
+        '../src/services/conversationStore.js'
+      );
+      const history = [{ role: 'user', content: 'Hello' }];
+      const lock = {
+        key: '9715551234',
+        ownerId: 'owner-1',
+        assertLockHeld: vi.fn(),
+      };
+
+      await saveConversationHistory('9715551234', history, { lock });
+
+      expect(lock.assertLockHeld).toHaveBeenCalledTimes(1);
+      expect(mockRpc).toHaveBeenCalledWith(
+        'save_conversation_history_with_lock',
+        {
+          p_whatsapp_id: '9715551234',
+          p_history: history,
+          p_lock_key: '9715551234',
+          p_lock_owner_id: 'owner-1',
+        }
+      );
+      expect(mockUpsert).not.toHaveBeenCalled();
+    });
+    it('marks a rejected lock-checked save as a lost lock', async () => {
+      mockRpc.mockResolvedValue({
+        error: {
+          code: 'P0001',
+          message: 'Distributed lock for "9715551234" is no longer held.',
+        },
+      });
+      const { saveConversationHistory } = await import(
+        '../src/services/conversationStore.js'
+      );
+
+      const save = saveConversationHistory(
+        '9715551234',
+        [{ role: 'user', content: 'Hello' }],
+        {
+          lock: {
+            key: '9715551234',
+            ownerId: 'owner-1',
+            assertLockHeld: vi.fn(),
+          },
+        }
+      );
+
+      await expect(save).rejects.toMatchObject({
+        code: 'DISTRIBUTED_LOCK_LOST',
+      });
     });
     it('throws when Supabase returns an error on write', async () => {
       mockUpsert.mockResolvedValue({

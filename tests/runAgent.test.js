@@ -16,6 +16,8 @@ import {
 } from '../src/services/conversationStore.js';
 import { executeToolCall } from '../src/agent/executeToolCall.js';
 import { runAgent } from '../src/agent/runAgent.js';
+import { __resetConversationCacheForTests } from '../src/services/conversationCache.js';
+import { __resetKeyedQueueForTests } from '../src/lib/keyedQueue.js';
 import {
   getUsageSnapshot,
   __resetUsageForTests,
@@ -25,6 +27,8 @@ describe('runAgent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     __resetUsageForTests();
+    __resetConversationCacheForTests();
+    __resetKeyedQueueForTests();
     getConversationHistory.mockResolvedValue([]);
     saveConversationHistory.mockResolvedValue(undefined);
   });

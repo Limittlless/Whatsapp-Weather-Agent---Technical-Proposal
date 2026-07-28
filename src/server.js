@@ -7,6 +7,8 @@ import rateLimit from 'express-rate-limit';
 
 import { createCloudApiWebhookRouter } from './gateways/cloudApiWebhook.js';
 import { createCloudApiSender } from './gateways/cloudApiClient.js';
+import { drainKeyedQueue } from './lib/keyedQueue.js';
+import { flushAllConversationCache } from './services/conversationCache.js';
 import { configureErrorTracker } from './services/errorTracker.js';
 
 const PORT = process.env.PORT || 3000;
@@ -39,6 +41,10 @@ function buildApp() {
     appSecret,
   });
 
+  return { app: buildExpress(webhookRouter), webhookRouter };
+}
+
+function buildExpress(webhookRouter) {
   const app = express();
 
   app.set('trust proxy', 1);
@@ -76,33 +82,74 @@ function buildApp() {
   return app;
 }
 
+function closeHttpServer(server) {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+
+    if (typeof server.closeIdleConnections === 'function') {
+      server.closeIdleConnections();
+    }
+  });
+}
+
 const isRunDirectly =
   process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 
 if (isRunDirectly) {
-  const app = buildApp();
+  const { app, webhookRouter } = buildApp();
 
   const server = app.listen(PORT, () => {
     console.log(`[server] Listening on port ${PORT}`);
     console.log(`[server] Webhook URL: http://localhost:${PORT}/webhook`);
   });
 
-  const shutdown = (signal) => {
+  let isShuttingDown = false;
+
+  const shutdown = async (signal) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
     console.log(`[server] Received ${signal}, shutting down gracefully...`);
 
-    server.close(() => {
-      console.log('[server] Closed all connections. Exiting.');
-      process.exit(0);
-    });
-
-    setTimeout(() => {
+    const forceExitTimer = setTimeout(() => {
       console.error('[server] Forced shutdown after timeout.');
       process.exit(1);
-    }, 10_000).unref();
+    }, 10_000);
+    forceExitTimer.unref?.();
+
+    try {
+      await closeHttpServer(server);
+    } catch (error) {
+      console.error('[server] Failed to close HTTP server:', error);
+    }
+
+    try {
+      await webhookRouter.drain();
+      await drainKeyedQueue();
+    } catch (error) {
+      console.error('[server] Error draining tasks during shutdown:', error);
+    }
+
+    try {
+      await flushAllConversationCache();
+    } catch (error) {
+      console.error(
+        '[server] Failed to flush conversation cache during shutdown:',
+        error
+      );
+    }
+
+    console.log('[server] Closed all connections and flushed cache. Exiting.');
+    process.exit(0);
   };
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-export { buildApp };
+export { buildApp, closeHttpServer };
