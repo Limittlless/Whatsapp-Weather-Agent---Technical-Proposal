@@ -85,11 +85,16 @@ export async function flushConversationHistory(whatsappId) {
 
   if (!entry.flushInFlight && entry.dirty) {
     await drainFlush(whatsappId, entry);
-    return;
+  } else {
+    while (entry.flushInFlight) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
   }
 
-  while (entry.flushInFlight) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  if (cache.get(whatsappId)?.dirty) {
+    throw new Error(
+      `Failed to flush conversation history for "${whatsappId}": last save attempt was unsuccessful.`,
+    );
   }
 }
 
@@ -130,11 +135,21 @@ function ensureSweepTimer() {
 }
 
 export async function flushAllConversationCache() {
-  await Promise.all(
+  const results = await Promise.allSettled(
     Array.from(cache.keys()).map((whatsappId) =>
       flushConversationHistory(whatsappId),
     ),
   );
+
+  const failures = results
+    .filter((r) => r.status === 'rejected')
+    .map((r) => r.reason?.message ?? String(r.reason));
+
+  if (failures.length > 0) {
+    throw new Error(
+      `flushAllConversationCache: ${failures.length} flush(es) failed:\n${failures.join('\n')}`,
+    );
+  }
 }
 
 export function __configureConversationCacheForTests({

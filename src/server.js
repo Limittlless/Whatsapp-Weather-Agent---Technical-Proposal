@@ -40,6 +40,11 @@ function buildApp() {
     appSecret,
   });
 
+  return { app: buildExpress(webhookRouter), webhookRouter };
+}
+
+function buildExpress(webhookRouter) {
+
   const app = express();
 
   app.set('trust proxy', 1);
@@ -81,7 +86,7 @@ const isRunDirectly =
   process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 
 if (isRunDirectly) {
-  const app = buildApp();
+  const { app, webhookRouter } = buildApp();
 
   const server = app.listen(PORT, () => {
     console.log(`[server] Listening on port ${PORT}`);
@@ -93,6 +98,11 @@ if (isRunDirectly) {
 
     server.close(async () => {
       try {
+        await webhookRouter.drain();
+      } catch {
+      }
+
+      try {
         await flushAllConversationCache();
       } catch (error) {
         console.error(
@@ -100,6 +110,7 @@ if (isRunDirectly) {
           error,
         );
       }
+
       console.log('[server] Closed all connections. Exiting.');
       process.exit(0);
     });

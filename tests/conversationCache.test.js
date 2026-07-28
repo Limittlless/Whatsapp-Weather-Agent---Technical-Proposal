@@ -178,4 +178,29 @@ describe('conversationCache', () => {
       vi.useRealTimers();
     }
   });
+
+  it('flushConversationHistory throws when a save fails and the entry is still dirty', async () => {
+    saveConversationHistory.mockRejectedValue(new Error('disk full'));
+
+    setCachedConversationHistory('212600000000', [
+      { role: 'user', content: 'hi' },
+    ]);
+
+    await expect(
+      flushConversationHistory('212600000000'),
+    ).rejects.toThrow('last save attempt was unsuccessful');
+  });
+
+  it('flushAllConversationCache rejects with an aggregated error when any flush fails', async () => {
+    saveConversationHistory
+      .mockResolvedValueOnce(undefined) 
+      .mockRejectedValueOnce(new Error('quota exceeded')); 
+
+    setCachedConversationHistory('user-a', [{ role: 'user', content: 'a' }]);
+    setCachedConversationHistory('user-b', [{ role: 'user', content: 'b' }]);
+
+    await expect(flushAllConversationCache()).rejects.toThrow(
+      'flushAllConversationCache: 1 flush(es) failed',
+    );
+  });
 });

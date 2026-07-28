@@ -41,6 +41,8 @@ export function createCloudApiWebhookRouter({
   const router = Router();
   const verifyMetaSignature = createMetaSignatureVerifier(appSecret);
 
+  const activeTasks = new Set();
+
   router.get('/', (req, res) => {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
@@ -59,7 +61,7 @@ export function createCloudApiWebhookRouter({
     res.sendStatus(200);
 
     setTimeout(() => {
-      processIncomingEntries(entries, {
+      const task = processIncomingEntries(entries, {
         runAgentFn,
         sendMessageFn,
         claimMessageFn,
@@ -68,8 +70,12 @@ export function createCloudApiWebhookRouter({
       }).catch((error) => {
         console.error('[webhook] Failed to process webhook payload:', error);
       });
+
+      activeTasks.add(task);
+      task.finally(() => activeTasks.delete(task));
     }, 0);
   });
+  router.drain = () => Promise.allSettled(Array.from(activeTasks));
 
   return router;
 }

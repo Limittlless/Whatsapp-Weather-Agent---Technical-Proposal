@@ -63,6 +63,4 @@ export async function saveConversationHistory(whatsappId, history) {
         ),
     { operation: 'saveConversationHistory', context: { whatsappId } },
   );
-
-  return true;
 }
