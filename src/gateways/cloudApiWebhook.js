@@ -1,33 +1,18 @@
 import { Router } from 'express';
-import { runAgent as defaultRunAgent } from '../agent/runAgent.js';
-import { claimMessage as defaultClaimMessage } from '../services/processedMessages.js';
-import { createMetaSignatureVerifier } from '../middleware/verifyMetaSignature.js';
-import { isAdminNumber } from '../services/adminAuth.js';
-import { isUserAuthorized as defaultIsUserAuthorized } from '../services/userAuthorization.js';
 import {
-  isAdminCommandMessage,
-  executeAdminCommand as defaultExecuteAdminCommand,
-} from '../services/adminCommands.js';
-
-const ACCESS_DENIED_MESSAGE =
-  '⛔ هذا الرقم غير مصرح له باستخدام البوت.\n' +
-  'This number is not authorized to use the bot.';
-
-const ACCESS_CHECK_FAILED_MESSAGE =
-  '⚠️ تعذر التحقق من صلاحية الوصول الآن. حاول مرة أخرى لاحقًا.\n' +
-  'Could not verify access right now. Please try again later.';
-
-const PROCESSING_FAILED_MESSAGE =
-  'تعذر معالجة رسالتك الآن. حاول مرة أخرى بعد قليل.\n' +
-  'Could not process your message right now. Please try again shortly.';
+  processIncomingMessage as defaultProcessIncomingMessage,
+} from '../agent/messagePipeline.js';
+import { createMetaSignatureVerifier } from '../middleware/verifyMetaSignature.js';
 
 export function createCloudApiWebhookRouter({
   verifyToken,
-  runAgentFn = defaultRunAgent,
+  processIncomingMessageFn = defaultProcessIncomingMessage,
+  runAgentFn,
   sendMessageFn,
-  claimMessageFn = defaultClaimMessage,
-  isAuthorizedFn = defaultIsUserAuthorized,
-  executeAdminCommandFn = defaultExecuteAdminCommand,
+  claimMessageFn,
+  isAuthorizedFn,
+  isAdminNumberFn,
+  executeAdminCommandFn,
   appSecret,
 } = {}) {
   if (!verifyToken?.trim()) {
@@ -70,10 +55,12 @@ export function createCloudApiWebhookRouter({
     })
       .then(() =>
         processIncomingEntries(entries, {
+          processIncomingMessageFn,
           runAgentFn,
           sendMessageFn,
           claimMessageFn,
           isAuthorizedFn,
+          isAdminNumberFn,
           executeAdminCommandFn,
         }),
       )
@@ -92,10 +79,12 @@ export function createCloudApiWebhookRouter({
 async function processIncomingEntries(
   entries,
   {
+    processIncomingMessageFn,
     runAgentFn,
     sendMessageFn,
     claimMessageFn,
     isAuthorizedFn,
+    isAdminNumberFn,
     executeAdminCommandFn,
   }
 ) {
@@ -106,11 +95,18 @@ async function processIncomingEntries(
       const messages = change?.value?.messages ?? [];
 
       for (const message of messages) {
-        await handleIncomingMessage(message, {
+        const internalMessage = toInternalMessage(message);
+
+        if (!internalMessage) {
+          continue;
+        }
+
+        await processIncomingMessageFn(internalMessage, {
           runAgentFn,
           sendMessageFn,
           claimMessageFn,
           isAuthorizedFn,
+          isAdminNumberFn,
           executeAdminCommandFn,
         });
       }
@@ -118,18 +114,9 @@ async function processIncomingEntries(
   }
 }
 
-async function handleIncomingMessage(
-  message,
-  {
-    runAgentFn,
-    sendMessageFn,
-    claimMessageFn,
-    isAuthorizedFn,
-    executeAdminCommandFn,
-  }
-) {
+export function toInternalMessage(message) {
   if (message?.type !== 'text') {
-    return;
+    return null;
   }
 
   const whatsappId = message.from;
@@ -137,69 +124,8 @@ async function handleIncomingMessage(
   const messageId = message.id;
 
   if (!whatsappId || !userMessage?.trim()) {
-    return;
+    return null;
   }
 
-  try {
-    const shouldProcess = await claimMessageFn(messageId, whatsappId);
-
-    if (!shouldProcess) {
-      console.log(`[webhook] Skipping already-processed message ${messageId}`);
-      return;
-    }
-
-    const isAdmin = isAdminNumber(whatsappId);
-
-    if (isAdminCommandMessage(userMessage) && isAdmin) {
-      try {
-        const reply = await executeAdminCommandFn(userMessage, {
-          adminWhatsappId: whatsappId,
-        });
-        await sendMessageFn(whatsappId, reply);
-      } catch (error) {
-        console.error('[webhook] Admin command failed:', error);
-        await sendMessageFn(
-          whatsappId,
-          'حدث خطأ أثناء تنفيذ الأمر. حاول مرة أخرى.'
-        );
-      }
-      return;
-    }
-
-    if (!isAdmin) {
-      let isAuthorized;
-
-      try {
-        isAuthorized = await isAuthorizedFn(whatsappId);
-      } catch (error) {
-        console.error('[webhook] Authorization check failed:', error);
-        await sendMessageFn(whatsappId, ACCESS_CHECK_FAILED_MESSAGE);
-        return;
-      }
-
-      if (!isAuthorized) {
-        await sendMessageFn(whatsappId, ACCESS_DENIED_MESSAGE);
-        return;
-      }
-    }
-
-    sendMessageFn.sendTypingIndicator?.(messageId);
-
-    const reply = await runAgentFn({ whatsappId, userMessage });
-    await sendMessageFn(whatsappId, reply);
-  } catch (error) {
-    console.error(
-      '[webhook] Failed to process an incoming message:',
-      error
-    );
-
-    try {
-      await sendMessageFn(whatsappId, PROCESSING_FAILED_MESSAGE);
-    } catch (sendError) {
-      console.error(
-        '[webhook] Failed to send the processing-error reply:',
-        sendError
-      );
-    }
-  }
+  return { whatsappId, userMessage, messageId };
 }
