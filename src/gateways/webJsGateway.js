@@ -1,3 +1,6 @@
+import { rmSync } from 'node:fs';
+import path from 'node:path';
+
 import whatsappWeb from 'whatsapp-web.js';
 import qrCodeTerminal from 'qrcode-terminal';
 import qrCodePng from 'qrcode';
@@ -13,6 +16,29 @@ const DEFAULT_AUTH_PATH = '.wwebjs_auth';
 const DEFAULT_RECONNECT_DELAY_MS = 10_000;
 const READY_RECOVERY_DELAY_MS = 3_000;
 const WEB_JS_SUFFIX = '@c.us';
+const SINGLETON_FILE_NAMES = [
+  'SingletonLock',
+  'SingletonCookie',
+  'SingletonSocket',
+];
+
+function clearStaleSingletonLock(authPath, clientId) {
+  const sessionDir = path.join(
+    path.resolve(authPath),
+    clientId ? `session-${clientId}` : 'session',
+  );
+
+  for (const name of SINGLETON_FILE_NAMES) {
+    try {
+      rmSync(path.join(sessionDir, name), { force: true });
+    } catch (error) {
+      console.warn(
+        `[webJsGateway] Failed to clear stale ${name}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+}
 
 function parseReconnectDelay(value) {
   const parsed = Number(value);
@@ -432,6 +458,8 @@ export function createWebJsProvider(
     const nextClient = createClient();
     client = nextClient;
     bindClientEvents(nextClient);
+
+    clearStaleSingletonLock(authPath, env.WHATSAPP_WEB_JS_CLIENT_ID?.trim());
 
     try {
       await nextClient.initialize();
