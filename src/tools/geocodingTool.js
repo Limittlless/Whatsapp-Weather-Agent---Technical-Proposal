@@ -7,8 +7,14 @@ const geocodingToolInputSchema = z.object({
     .string()
     .min(1)
     .describe(
-      'The city or place name to look up, exactly as mentioned by the ' +
-        'user (e.g. "Rabat", "Marrakesh", "New York").'
+      'The city or place name to look up. Always provide it in English, ' +
+        "using its common international/Latin-script spelling — even if " +
+        'the user asked in Arabic or another language or script. ' +
+        'Translate/transliterate it yourself first (e.g. "الرياض" -> ' +
+        '"Riyadh", "أكادير" -> "Agadir", "مكة" -> "Mecca", "طوكيو" -> ' +
+        '"Tokyo"). The geocoding lookup only reliably matches Latin-' +
+        'script names; passing the original non-Latin text will often ' +
+        'fail to find the place, even for well-known cities.'
     ),
 });
 

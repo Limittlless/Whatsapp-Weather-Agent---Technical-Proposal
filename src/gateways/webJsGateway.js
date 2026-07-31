@@ -1,5 +1,9 @@
+import { rmSync } from 'node:fs';
+import path from 'node:path';
+
 import whatsappWeb from 'whatsapp-web.js';
 import qrCodeTerminal from 'qrcode-terminal';
+import qrCodePng from 'qrcode';
 
 import {
   processIncomingMessage as defaultProcessIncomingMessage,
@@ -12,6 +16,29 @@ const DEFAULT_AUTH_PATH = '.wwebjs_auth';
 const DEFAULT_RECONNECT_DELAY_MS = 10_000;
 const READY_RECOVERY_DELAY_MS = 3_000;
 const WEB_JS_SUFFIX = '@c.us';
+const SINGLETON_FILE_NAMES = [
+  'SingletonLock',
+  'SingletonCookie',
+  'SingletonSocket',
+];
+
+function clearStaleSingletonLock(authPath, clientId) {
+  const sessionDir = path.join(
+    path.resolve(authPath),
+    clientId ? `session-${clientId}` : 'session',
+  );
+
+  for (const name of SINGLETON_FILE_NAMES) {
+    try {
+      rmSync(path.join(sessionDir, name), { force: true });
+    } catch (error) {
+      console.warn(
+        `[webJsGateway] Failed to clear stale ${name}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+}
 
 function parseReconnectDelay(value) {
   const parsed = Number(value);
@@ -65,6 +92,7 @@ export function createWebJsProvider(
   let readyRecoveryAttempted = false;
   let isReady = false;
   let isStopping = false;
+  let latestQr = null;
 
   function reportLifecycleError(error, event) {
     console.error(`[webJsGateway] ${event}:`, error);
@@ -349,7 +377,12 @@ export function createWebJsProvider(
         return;
       }
 
-      console.log('[webJsGateway] Scan this QR code to link WhatsApp:');
+      latestQr = qr;
+      console.log(
+        '[webJsGateway] Scan this QR code to link WhatsApp (ASCII QR in ' +
+          'logs can render unreadable — prefer opening GET /whatsapp-qr ' +
+          'in a browser for a clean scannable image):',
+      );
       try {
         qrCode.generate(qr, { small: true });
       } catch (error) {
@@ -362,12 +395,14 @@ export function createWebJsProvider(
         return;
       }
       isReady = true;
+      latestQr = null;
       clearReadyRecoveryTimer();
       console.log('[webJsGateway] WhatsApp Web client is ready.');
     });
 
     instance.on('authenticated', () => {
       if (instance === client && !isStopping) {
+        latestQr = null;
         console.log('[webJsGateway] WhatsApp Web session authenticated.');
         scheduleReadyRecovery(instance);
       }
@@ -423,6 +458,8 @@ export function createWebJsProvider(
     const nextClient = createClient();
     client = nextClient;
     bindClientEvents(nextClient);
+
+    clearStaleSingletonLock(authPath, env.WHATSAPP_WEB_JS_CLIENT_ID?.trim());
 
     try {
       await nextClient.initialize();
@@ -491,21 +528,48 @@ export function createWebJsProvider(
     }
   }
 
+  async function resolveChatForTyping(messageId, whatsappId) {
+    const sourceMessage = messageContexts.get(messageId);
+
+    if (sourceMessage?.getChat) {
+      return sourceMessage.getChat();
+    }
+
+    const chatId = resolveRecipientId(whatsappId);
+
+    try {
+      return await client.getChatById(chatId);
+    } catch (error) {
+      console.warn(
+        '[webJsGateway] getChatById failed, retrying once:',
+        error instanceof Error ? error.stack || error.message : error,
+      );
+      await new Promise((resolve) => setTimeoutFn(resolve, 500));
+      return client.getChatById(chatId);
+    }
+  }
+
   async function sendTypingIndicator(messageId, whatsappId) {
     if (!client || !isReady) {
       return;
     }
 
     try {
-      const sourceMessage = messageContexts.get(messageId);
-      const chat = sourceMessage?.getChat
-        ? await sourceMessage.getChat()
-        : await client.getChatById(resolveRecipientId(whatsappId));
+      const chat = await resolveChatForTyping(messageId, whatsappId);
+
+      if (!chat || typeof chat.sendStateTyping !== 'function') {
+        console.warn(
+          '[webJsGateway] Skipping typing indicator: chat is not ' +
+            `fully loaded yet for ${whatsappId ?? 'unknown recipient'}.`,
+        );
+        return;
+      }
+
       await chat.sendStateTyping();
     } catch (error) {
       console.warn(
         '[webJsGateway] Failed to send typing indicator:',
-        error instanceof Error ? error.message : error,
+        error instanceof Error ? error.stack || error.message : error,
       );
     }
   }
@@ -516,7 +580,41 @@ export function createWebJsProvider(
   return {
     name: 'web_js',
     sendMessage,
-    attachTo() {},
+    attachTo(app) {
+      app.get('/whatsapp-qr', async (req, res) => {
+        const expectedToken = env.WHATSAPP_WEB_JS_QR_TOKEN?.trim();
+
+        if (expectedToken && req.query.token !== expectedToken) {
+          res.status(404).send('Not found');
+          return;
+        }
+
+        if (!latestQr) {
+          res
+            .status(404)
+            .send(
+              isReady
+                ? 'Already linked — no QR code needed.'
+                : 'No QR code available yet. Check back in a few seconds.',
+            );
+          return;
+        }
+
+        try {
+          const png = await qrCodePng.toBuffer(latestQr, {
+            type: 'png',
+            width: 400,
+            margin: 2,
+          });
+          res.set('Content-Type', 'image/png');
+          res.set('Cache-Control', 'no-store');
+          res.send(png);
+        } catch (error) {
+          reportLifecycleError(error, 'Failed to render QR code image');
+          res.status(500).send('Failed to render QR code.');
+        }
+      });
+    },
     async initialize() {
       isStopping = false;
       await startClient();

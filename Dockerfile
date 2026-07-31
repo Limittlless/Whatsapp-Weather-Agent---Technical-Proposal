@@ -30,6 +30,7 @@ RUN apk add --no-cache \
     freetype \
     harfbuzz \
     nss \
+    su-exec \
     tini \
     ttf-freefont
 
@@ -40,9 +41,8 @@ COPY --chown=nodeapp:nodejs . .
 
 RUN rm -rf tests eslint.config.js .env.example && \
     mkdir -p /app/.wwebjs_auth && \
-    chown -R nodeapp:nodejs /app/.wwebjs_auth
-
-USER nodeapp
+    chown -R nodeapp:nodejs /app/.wwebjs_auth && \
+    chmod +x docker-entrypoint.sh
 
 ENV PORT=3000 \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser \
@@ -52,5 +52,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "fetch('http://localhost:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-ENTRYPOINT ["/sbin/tini", "--"]
+ENTRYPOINT ["/sbin/tini", "--", "/app/docker-entrypoint.sh"]
 CMD ["node", "src/server.js"]
