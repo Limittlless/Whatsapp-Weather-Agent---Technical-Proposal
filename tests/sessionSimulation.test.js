@@ -97,7 +97,8 @@ describe('multi-turn session behavior', () => {
     expect(contents).not.toContain('Nice to meet you, A.');
   });
 
-  it('preserves tool-call results in context for a follow-up question', async () => {
+  it('does not replay raw tool-call/tool-response turns into a later call', async () => {
+
     const whatsappId = '212600000003';
 
     executeToolCall.mockResolvedValue({
@@ -137,6 +138,12 @@ describe('multi-turn session behavior', () => {
       model: firstModel,
     });
 
+    const storedHistory = await getConversationHistory(whatsappId);
+    expect(storedHistory.some((m) => m.role === 'tool')).toBe(false);
+    expect(
+      storedHistory.some((m) => Array.isArray(m.tool_calls) && m.tool_calls.length > 0)
+    ).toBe(false);
+
     const secondModel = {
       invoke: vi
         .fn()
@@ -152,12 +159,13 @@ describe('multi-turn session behavior', () => {
     });
 
     const messagesSentToSecondModel = secondModel.invoke.mock.calls[0][0];
-    const toolMessage = messagesSentToSecondModel.find(
-      (m) => m.getType?.() === 'tool'
-    );
 
-    expect(toolMessage).toBeDefined();
-    expect(toolMessage.content).toContain('Agadir');
+    expect(
+      messagesSentToSecondModel.some((m) => m.getType?.() === 'tool')
+    ).toBe(false);
+    const contents = messagesSentToSecondModel.map((m) => m.content);
+    expect(contents).toContain('Where is Agadir?');
+    expect(contents).toContain('Agadir is on the Moroccan coast.');
   });
 
   it('keeps the system persona message present across many turns', async () => {

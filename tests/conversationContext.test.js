@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { prepareConversationHistory } from '../src/agent/conversationContext.js';
+import {
+  prepareConversationHistory,
+  stripToolCallTurns,
+} from '../src/agent/conversationContext.js';
 import { SYSTEM_PROMPT } from '../src/agent/persona.js';
 
 describe('prepareConversationHistory', () => {
@@ -133,5 +136,99 @@ describe('prepareConversationHistory', () => {
     prepareConversationHistory(history, 'Hello');
 
     expect(history).toEqual([]);
+  });
+});
+
+describe('stripToolCallTurns', () => {
+  it('removes a paired assistant tool-call message and its tool response', () => {
+    const history = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: 'What is the weather in Nouakchott?' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'call_1', name: 'get_weather', args: { city: 'Nouakchott' } },
+        ],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'call_1',
+        name: 'get_weather',
+        content: '{"tempC":32}',
+      },
+      { role: 'assistant', content: "It's 32°C in Nouakchott." },
+    ];
+
+    const result = stripToolCallTurns(history);
+
+    expect(result.map((m) => m.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+    ]);
+    expect(result.at(-1)).toEqual({
+      role: 'assistant',
+      content: "It's 32°C in Nouakchott.",
+    });
+  });
+
+  it('removes a dangling assistant tool-call message with no tool response', () => {
+    const history = [
+      { role: 'user', content: 'Hi' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call_1', name: 'get_weather', args: {} }],
+      },
+    ];
+
+    const result = stripToolCallTurns(history);
+
+    expect(result).toEqual([{ role: 'user', content: 'Hi' }]);
+  });
+
+  it('removes multiple tool-call rounds across a longer history', () => {
+    const history = [
+      { role: 'user', content: 'Weather in Agadir?' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call_1', name: 'geocode', args: {} }],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: '{"lat":30.4}' },
+      { role: 'assistant', content: 'Agadir is on the coast.' },
+      { role: 'user', content: 'And Rabat?' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call_2', name: 'geocode', args: {} }],
+      },
+      { role: 'tool', tool_call_id: 'call_2', content: '{"lat":34.0}' },
+      { role: 'assistant', content: 'Rabat is further north.' },
+    ];
+
+    const result = stripToolCallTurns(history);
+
+    expect(result).toEqual([
+      { role: 'user', content: 'Weather in Agadir?' },
+      { role: 'assistant', content: 'Agadir is on the coast.' },
+      { role: 'user', content: 'And Rabat?' },
+      { role: 'assistant', content: 'Rabat is further north.' },
+    ]);
+  });
+
+  it('leaves history untouched when there are no tool-call turns', () => {
+    const history = [
+      { role: 'user', content: 'Hello' },
+      { role: 'assistant', content: 'Hi there!' },
+    ];
+
+    expect(stripToolCallTurns(history)).toEqual(history);
+  });
+
+  it('handles empty and non-array input safely', () => {
+    expect(stripToolCallTurns([])).toEqual([]);
+    expect(stripToolCallTurns(null)).toEqual([]);
   });
 });

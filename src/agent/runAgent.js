@@ -13,8 +13,8 @@ import { pruneHistory } from '../services/pruneHistory.js';
 import { recordGeminiCall } from '../services/usageMetrics.js';
 
 import {
-  dropDanglingToolCallTurn,
   prepareConversationHistory,
+  stripToolCallTurns,
 } from './conversationContext.js';
 import { executeToolCall } from './executeToolCall.js';
 import {
@@ -218,7 +218,7 @@ async function runAgentInternal({ whatsappId, userMessage, model, lock }) {
         );
 
         const updatedHistory = pruneHistory(
-          messages.map(toStoredMessage),
+          stripToolCallTurns(messages.map(toStoredMessage)),
         );
 
         lock.assertLockHeld();
@@ -232,7 +232,7 @@ async function runAgentInternal({ whatsappId, userMessage, model, lock }) {
       messages.push(aiMessage);
 
       const updatedHistory = pruneHistory(
-        messages.map(toStoredMessage),
+        stripToolCallTurns(messages.map(toStoredMessage)),
       );
 
       lock.assertLockHeld();
@@ -270,7 +270,7 @@ async function runAgentInternal({ whatsappId, userMessage, model, lock }) {
     if (Array.isArray(messages) && messages.length > 0) {
       try {
         const updatedHistory = pruneHistory(
-          dropDanglingToolCallTurn(messages.map(toStoredMessage)),
+          stripToolCallTurns(messages.map(toStoredMessage)),
         );
 
         lock.assertLockHeld();
