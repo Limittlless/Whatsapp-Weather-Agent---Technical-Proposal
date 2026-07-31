@@ -538,11 +538,20 @@ export function createWebJsProvider(
       const chat = sourceMessage?.getChat
         ? await sourceMessage.getChat()
         : await client.getChatById(resolveRecipientId(whatsappId));
+
+      if (!chat || typeof chat.sendStateTyping !== 'function') {
+        console.warn(
+          '[webJsGateway] Skipping typing indicator: chat is not ' +
+            `fully loaded yet for ${whatsappId ?? 'unknown recipient'}.`,
+        );
+        return;
+      }
+
       await chat.sendStateTyping();
     } catch (error) {
       console.warn(
         '[webJsGateway] Failed to send typing indicator:',
-        error instanceof Error ? error.message : error,
+        error instanceof Error ? error.stack || error.message : error,
       );
     }
   }
