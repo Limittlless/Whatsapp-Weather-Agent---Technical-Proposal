@@ -1,5 +1,7 @@
 function normalize(number) {
-  return String(number ?? '').trim();
+  return String(number ?? '')
+    .trim()
+    .replace(/[\s()+-]/g, '');
 }
 
 export function getAdminNumbers(env = process.env) {

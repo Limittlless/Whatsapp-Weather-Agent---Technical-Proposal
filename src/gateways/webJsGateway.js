@@ -244,10 +244,19 @@ export function createWebJsProvider(
   async function resolveIncomingWhatsAppId(sourceId, instance) {
     const fallbackId = toInternalWhatsAppId(sourceId);
 
-    if (
-      !sourceId.endsWith('@lid') ||
-      typeof instance.getContactLidAndPhone !== 'function'
-    ) {
+    if (!sourceId.endsWith('@lid')) {
+      return fallbackId;
+    }
+
+    if (typeof instance.getContactLidAndPhone !== 'function') {
+      console.warn(
+        `[webJsGateway] Received a @lid id (${sourceId}) but this ` +
+          'whatsapp-web.js client has no getContactLidAndPhone method. ' +
+          `Falling back to the raw lid (${fallbackId}) — this will NOT ` +
+          'match a phone-number-based entry in ADMIN_WHATSAPP_NUMBERS or ' +
+          'authorized_users. Update whatsapp-web.js to a version that ' +
+          'supports lid resolution.',
+      );
       return fallbackId;
     }
 
@@ -256,10 +265,24 @@ export function createWebJsProvider(
         sourceId,
       ]);
       const phoneChatId = mappings?.[0]?.pn;
-      return toInternalWhatsAppId(phoneChatId) || fallbackId;
+      const resolvedId = toInternalWhatsAppId(phoneChatId);
+
+      if (!resolvedId) {
+        console.warn(
+          `[webJsGateway] Could not resolve @lid (${sourceId}) to a phone ` +
+            `number (got: ${JSON.stringify(mappings)}). Falling back to ` +
+            `the raw lid (${fallbackId}) — this will NOT match a ` +
+            'phone-number-based entry in ADMIN_WHATSAPP_NUMBERS or ' +
+            'authorized_users. The contact may not be synced yet.',
+        );
+        return fallbackId;
+      }
+
+      return resolvedId;
     } catch (error) {
       console.warn(
-        '[webJsGateway] Failed to resolve an incoming LID to a phone number:',
+        `[webJsGateway] Failed to resolve @lid (${sourceId}) to a phone ` +
+          `number. Falling back to the raw lid (${fallbackId}):`,
         error instanceof Error ? error.message : error,
       );
       return fallbackId;
