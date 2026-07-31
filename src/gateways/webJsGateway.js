@@ -1,5 +1,6 @@
 import whatsappWeb from 'whatsapp-web.js';
 import qrCodeTerminal from 'qrcode-terminal';
+import qrCodePng from 'qrcode';
 
 import {
   processIncomingMessage as defaultProcessIncomingMessage,
@@ -65,6 +66,7 @@ export function createWebJsProvider(
   let readyRecoveryAttempted = false;
   let isReady = false;
   let isStopping = false;
+  let latestQr = null;
 
   function reportLifecycleError(error, event) {
     console.error(`[webJsGateway] ${event}:`, error);
@@ -349,7 +351,12 @@ export function createWebJsProvider(
         return;
       }
 
-      console.log('[webJsGateway] Scan this QR code to link WhatsApp:');
+      latestQr = qr;
+      console.log(
+        '[webJsGateway] Scan this QR code to link WhatsApp (ASCII QR in ' +
+          'logs can render unreadable — prefer opening GET /whatsapp-qr ' +
+          'in a browser for a clean scannable image):',
+      );
       try {
         qrCode.generate(qr, { small: true });
       } catch (error) {
@@ -362,12 +369,14 @@ export function createWebJsProvider(
         return;
       }
       isReady = true;
+      latestQr = null;
       clearReadyRecoveryTimer();
       console.log('[webJsGateway] WhatsApp Web client is ready.');
     });
 
     instance.on('authenticated', () => {
       if (instance === client && !isStopping) {
+        latestQr = null;
         console.log('[webJsGateway] WhatsApp Web session authenticated.');
         scheduleReadyRecovery(instance);
       }
@@ -516,7 +525,41 @@ export function createWebJsProvider(
   return {
     name: 'web_js',
     sendMessage,
-    attachTo() {},
+    attachTo(app) {
+      app.get('/whatsapp-qr', async (req, res) => {
+        const expectedToken = env.WHATSAPP_WEB_JS_QR_TOKEN?.trim();
+
+        if (expectedToken && req.query.token !== expectedToken) {
+          res.status(404).send('Not found');
+          return;
+        }
+
+        if (!latestQr) {
+          res
+            .status(404)
+            .send(
+              isReady
+                ? 'Already linked — no QR code needed.'
+                : 'No QR code available yet. Check back in a few seconds.',
+            );
+          return;
+        }
+
+        try {
+          const png = await qrCodePng.toBuffer(latestQr, {
+            type: 'png',
+            width: 400,
+            margin: 2,
+          });
+          res.set('Content-Type', 'image/png');
+          res.set('Cache-Control', 'no-store');
+          res.send(png);
+        } catch (error) {
+          reportLifecycleError(error, 'Failed to render QR code image');
+          res.status(500).send('Failed to render QR code.');
+        }
+      });
+    },
     async initialize() {
       isStopping = false;
       await startClient();
