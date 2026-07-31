@@ -5,52 +5,38 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 
-import { createCloudApiWebhookRouter } from './gateways/cloudApiWebhook.js';
-import { createCloudApiSender } from './gateways/cloudApiClient.js';
+import {
+  CLOUD_API_PROVIDER,
+  createWhatsAppProvider,
+} from './gateways/providerFactory.js';
 import { drainKeyedQueue } from './lib/keyedQueue.js';
 import { flushAllConversationCache } from './services/conversationCache.js';
 import { configureErrorTracker } from './services/errorTracker.js';
 
 const PORT = process.env.PORT || 3000;
-const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
-function buildApp() {
-  const appSecret = process.env.WHATSAPP_APP_SECRET;
-
-  if (IS_PRODUCTION && !appSecret?.trim()) {
-    throw new Error(
-      'WHATSAPP_APP_SECRET is required when NODE_ENV=production. ' +
-        'Without it, incoming webhook requests cannot be verified as ' +
-        "genuinely coming from Meta. Set it in Railway's Variables tab."
-    );
-  }
-
-  const sendMessage = createCloudApiSender({
-    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
-    accessToken: process.env.WHATSAPP_CLOUD_API_TOKEN,
-  });
+function buildApp({
+  env = process.env,
+  createProviderFn = createWhatsAppProvider,
+} = {}) {
+  const provider = createProviderFn(env);
 
   configureErrorTracker({
-    sendAlertFn: sendMessage.rawSend,
-    adminNumber: process.env.ADMIN_ALERT_WHATSAPP_NUMBER,
+    sendAlertFn: provider.sendMessage.rawSend,
+    adminNumber: env.ADMIN_ALERT_WHATSAPP_NUMBER,
   });
 
-  const webhookRouter = createCloudApiWebhookRouter({
-    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN,
-    sendMessageFn: sendMessage,
-    appSecret,
-  });
-
-  return { app: buildExpress(webhookRouter), webhookRouter };
+  return { app: buildExpress(provider, env), provider };
 }
 
-function buildExpress(webhookRouter) {
+function buildExpress(provider, env = process.env) {
   const app = express();
+  const isProduction = env.NODE_ENV === 'production';
 
   app.set('trust proxy', 1);
 
   app.use(helmet());
-  app.use(morgan(IS_PRODUCTION ? 'combined' : 'dev'));
+  app.use(morgan(isProduction ? 'combined' : 'dev'));
 
   app.use(
     express.json({
@@ -68,7 +54,8 @@ function buildExpress(webhookRouter) {
     legacyHeaders: false,
   });
 
-  app.use('/webhook', webhookLimiter, webhookRouter);
+  app.use('/webhook', webhookLimiter);
+  provider.attachTo(app);
 
   app.get('/health', (_req, res) => {
     res.status(200).json({ status: 'ok' });
@@ -102,11 +89,19 @@ const isRunDirectly =
   process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 
 if (isRunDirectly) {
-  const { app, webhookRouter } = buildApp();
+  const { app, provider } = buildApp();
 
   const server = app.listen(PORT, () => {
     console.log(`[server] Listening on port ${PORT}`);
-    console.log(`[server] Webhook URL: http://localhost:${PORT}/webhook`);
+    console.log(`[server] WhatsApp provider: ${provider.name}`);
+
+    if (provider.name === CLOUD_API_PROVIDER) {
+      console.log(`[server] Webhook URL: http://localhost:${PORT}/webhook`);
+    }
+  });
+
+  Promise.resolve(provider.initialize?.()).catch((error) => {
+    console.error('[server] WhatsApp provider initialization failed:', error);
   });
 
   let isShuttingDown = false;
@@ -129,7 +124,7 @@ if (isRunDirectly) {
     }
 
     try {
-      await webhookRouter.drain();
+      await provider.drain?.();
       await drainKeyedQueue();
     } catch (error) {
       console.error('[server] Error draining tasks during shutdown:', error);
@@ -152,4 +147,4 @@ if (isRunDirectly) {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-export { buildApp, closeHttpServer };
+export { buildApp, buildExpress, closeHttpServer };

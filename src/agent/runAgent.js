@@ -12,7 +12,10 @@ import { trackError } from '../services/errorTracker.js';
 import { pruneHistory } from '../services/pruneHistory.js';
 import { recordGeminiCall } from '../services/usageMetrics.js';
 
-import { prepareConversationHistory } from './conversationContext.js';
+import {
+  dropDanglingToolCallTurn,
+  prepareConversationHistory,
+} from './conversationContext.js';
 import { executeToolCall } from './executeToolCall.js';
 import {
   extractVisibleText,
@@ -267,7 +270,7 @@ async function runAgentInternal({ whatsappId, userMessage, model, lock }) {
     if (Array.isArray(messages) && messages.length > 0) {
       try {
         const updatedHistory = pruneHistory(
-          messages.map(toStoredMessage),
+          dropDanglingToolCallTurn(messages.map(toStoredMessage)),
         );
 
         lock.assertLockHeld();

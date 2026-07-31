@@ -35,4 +35,12 @@ export default [
   {
     ignores: ['node_modules/', 'dist/', 'coverage/'],
   },
+  {
+    files: ['src/gateways/webJsGateway.js'],
+    languageOptions: {
+      globals: {
+        window: 'readonly',
+      },
+    },
+  },
 ];

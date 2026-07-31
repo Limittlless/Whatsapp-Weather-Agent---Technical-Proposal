@@ -54,6 +54,7 @@ function createFakeLockClient({
 describe('runExclusive', () => {
   beforeEach(() => {
     __resetKeyedQueueForTests();
+    __configureKeyedQueueForTests({ supabaseClient: null });
   });
 
   afterEach(() => {

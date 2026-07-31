@@ -7,4 +7,9 @@ services:
       - .env
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
+    volumes:
+      - whatsapp-web-auth:/app/.wwebjs_auth
     restart: unless-stopped
+
+volumes:
+  whatsapp-web-auth:

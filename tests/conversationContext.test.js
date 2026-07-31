@@ -69,4 +69,69 @@ describe('prepareConversationHistory', () => {
       prepareConversationHistory([], '   '),
     ).toThrow('User message is required.');
   });
+
+  it('drops a trailing assistant tool-call message with no matching tool response', () => {
+    const history = [
+      {
+        role: 'system',
+        content: SYSTEM_PROMPT,
+      },
+      {
+        role: 'user',
+        content: 'What is the weather in Nouakchott?',
+      },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'call_1', name: 'get_weather', args: { city: 'Nouakchott' } },
+        ],
+      },
+    ];
+
+    const result = prepareConversationHistory(history, 'Still there?');
+
+    const roles = result.map((message) => message.role);
+    expect(roles).not.toContain('assistant');
+    expect(result.at(-1)).toEqual({
+      role: 'user',
+      content: 'Still there?',
+    });
+  });
+
+  it('keeps a properly paired assistant tool-call and tool response', () => {
+    const history = [
+      {
+        role: 'system',
+        content: SYSTEM_PROMPT,
+      },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'call_1', name: 'get_weather', args: { city: 'Nouakchott' } },
+        ],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'call_1',
+        name: 'get_weather',
+        content: '{"tempC":32}',
+      },
+    ];
+
+    const result = prepareConversationHistory(history, 'Thanks!');
+
+    const roles = result.map((message) => message.role);
+    expect(roles).toContain('assistant');
+    expect(roles).toContain('tool');
+  });
+
+  it('does not mutate the caller-provided history array', () => {
+    const history = [];
+
+    prepareConversationHistory(history, 'Hello');
+
+    expect(history).toEqual([]);
+  });
 });
