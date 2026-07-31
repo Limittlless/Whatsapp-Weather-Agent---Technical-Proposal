@@ -22,6 +22,8 @@ export const PROCESSING_FAILED_MESSAGE =
 const ADMIN_COMMAND_FAILED_MESSAGE =
   'حدث خطأ أثناء تنفيذ الأمر. حاول مرة أخرى.';
 
+const TYPING_INDICATOR_REFRESH_MS = 20_000;
+
 export async function processIncomingMessage(
   { whatsappId, userMessage, messageId } = {},
   {
@@ -31,6 +33,7 @@ export async function processIncomingMessage(
     isAuthorizedFn = defaultIsUserAuthorized,
     isAdminNumberFn = defaultIsAdminNumber,
     executeAdminCommandFn = defaultExecuteAdminCommand,
+    typingIndicatorRefreshMs = TYPING_INDICATOR_REFRESH_MS,
   } = {},
 ) {
   if (!whatsappId?.trim() || !userMessage?.trim()) {
@@ -88,9 +91,26 @@ export async function processIncomingMessage(
       }
     }
 
-    sendMessageFn.sendTypingIndicator?.(messageId, whatsappId);
+    const refreshTypingIndicator = () => {
+      sendMessageFn.sendTypingIndicator?.(messageId, whatsappId);
+    };
 
-    const reply = await runAgentFn({ whatsappId, userMessage });
+    refreshTypingIndicator();
+
+    const typingIntervalId = sendMessageFn.sendTypingIndicator
+      ? setInterval(refreshTypingIndicator, typingIndicatorRefreshMs)
+      : null;
+
+    let reply;
+
+    try {
+      reply = await runAgentFn({ whatsappId, userMessage });
+    } finally {
+      if (typingIntervalId) {
+        clearInterval(typingIntervalId);
+      }
+    }
+
     await sendMessageFn(whatsappId, reply);
   } catch (error) {
     console.error(

@@ -140,6 +140,58 @@ describe('processIncomingMessage', () => {
     );
   });
 
+  it('keeps refreshing the typing indicator while the reply is still generating', async () => {
+    const typingIndicator = vi.fn().mockResolvedValue(undefined);
+    const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+    sendMessageFn.sendTypingIndicator = typingIndicator;
+
+    let resolveAgent;
+    const agentPromise = new Promise((resolve) => {
+      resolveAgent = resolve;
+    });
+
+    const deps = createDependencies({
+      sendMessageFn,
+      runAgentFn: vi.fn().mockReturnValue(agentPromise),
+      typingIndicatorRefreshMs: 10,
+    });
+
+    const processingPromise = processIncomingMessage(
+      createMessage(),
+      deps,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const callsWhileGenerating = typingIndicator.mock.calls.length;
+    expect(callsWhileGenerating).toBeGreaterThan(1);
+
+    resolveAgent('Agent reply');
+    await processingPromise;
+
+    const callsAfterReply = typingIndicator.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(typingIndicator.mock.calls.length).toBe(callsAfterReply);
+  });
+
+  it('stops refreshing the typing indicator if the agent throws', async () => {
+    const typingIndicator = vi.fn().mockResolvedValue(undefined);
+    const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+    sendMessageFn.sendTypingIndicator = typingIndicator;
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const deps = createDependencies({
+      sendMessageFn,
+      runAgentFn: vi.fn().mockRejectedValue(new Error('boom')),
+      typingIndicatorRefreshMs: 10,
+    });
+
+    await processIncomingMessage(createMessage(), deps);
+
+    const callsAfterFailure = typingIndicator.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(typingIndicator.mock.calls.length).toBe(callsAfterFailure);
+  });
+
   it('sends a retry reply after an unexpected processing failure', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const deps = createDependencies({
