@@ -102,6 +102,7 @@ export function createWebJsProvider(
     return new ClientCtor({
       authStrategy: new LocalAuthCtor(localAuthOptions),
       puppeteer,
+      webVersionCache: { type: 'none' },
     });
   }
 
