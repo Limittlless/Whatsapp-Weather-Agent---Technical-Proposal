@@ -528,16 +528,34 @@ export function createWebJsProvider(
     }
   }
 
+  async function resolveChatForTyping(messageId, whatsappId) {
+    const sourceMessage = messageContexts.get(messageId);
+
+    if (sourceMessage?.getChat) {
+      return sourceMessage.getChat();
+    }
+
+    const chatId = resolveRecipientId(whatsappId);
+
+    try {
+      return await client.getChatById(chatId);
+    } catch (error) {
+      console.warn(
+        '[webJsGateway] getChatById failed, retrying once:',
+        error instanceof Error ? error.stack || error.message : error,
+      );
+      await new Promise((resolve) => setTimeoutFn(resolve, 500));
+      return client.getChatById(chatId);
+    }
+  }
+
   async function sendTypingIndicator(messageId, whatsappId) {
     if (!client || !isReady) {
       return;
     }
 
     try {
-      const sourceMessage = messageContexts.get(messageId);
-      const chat = sourceMessage?.getChat
-        ? await sourceMessage.getChat()
-        : await client.getChatById(resolveRecipientId(whatsappId));
+      const chat = await resolveChatForTyping(messageId, whatsappId);
 
       if (!chat || typeof chat.sendStateTyping !== 'function') {
         console.warn(
