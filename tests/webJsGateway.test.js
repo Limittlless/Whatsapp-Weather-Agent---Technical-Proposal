@@ -24,6 +24,9 @@ function createClientHarness({ initializeError } = {}) {
       this.getChatById = vi.fn().mockResolvedValue({
         sendStateTyping: vi.fn().mockResolvedValue(undefined),
       });
+      this.pupPage = {
+        evaluate: vi.fn().mockResolvedValue(true),
+      };
       this.getContactLidAndPhone = vi
         .fn()
         .mockResolvedValue([]);
@@ -75,6 +78,7 @@ describe('webJsGateway ID mapping', () => {
 
 describe('createWebJsProvider', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -107,6 +111,23 @@ describe('createWebJsProvider', () => {
 
     await provider.drain();
     expect(clients[0].destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows a verified WhatsApp Web version to be pinned', async () => {
+    const { FakeClient, clients } = createClientHarness();
+    const provider = createWebJsProvider(
+      { WHATSAPP_WEB_JS_WEB_VERSION: '2.3000.1234567890' },
+      {
+        ClientCtor: FakeClient,
+        LocalAuthCtor: FakeLocalAuth,
+      },
+    );
+
+    await provider.initialize();
+
+    expect(clients[0].options.webVersion).toBe('2.3000.1234567890');
+    expect(clients[0].options.webVersionCache).toBeUndefined();
+    await provider.drain();
   });
 
   it('normalizes an incoming message and sends the reply to its real chat ID', async () => {
@@ -193,15 +214,16 @@ describe('createWebJsProvider', () => {
     await provider.drain();
   });
 
-  it('supports a typing indicator through the incoming message chat', async () => {
+  it('sends typing state directly without resolving a chat model', async () => {
     const { FakeClient, clients } = createClientHarness();
     const incoming = createIncomingMessage();
     const processIncomingMessageFn = vi.fn(
       async (message, { sendMessageFn }) => {
-        await sendMessageFn.sendTypingIndicator(
+        const sent = await sendMessageFn.sendTypingIndicator(
           message.messageId,
           message.whatsappId,
         );
+        expect(sent).toBe(true);
       },
     );
     const provider = createWebJsProvider(
@@ -217,8 +239,81 @@ describe('createWebJsProvider', () => {
     clients[0].emit('message', incoming);
     await provider.drain();
 
-    const chat = await incoming.getChat.mock.results[0].value;
-    expect(chat.sendStateTyping).toHaveBeenCalledTimes(1);
+    expect(clients[0].pupPage.evaluate).toHaveBeenCalledWith(
+      expect.any(Function),
+      '212600000000@c.us',
+    );
+    expect(incoming.getChat).not.toHaveBeenCalled();
+    expect(clients[0].getChatById).not.toHaveBeenCalled();
+  });
+
+  it('shares an in-flight typing operation for the same chat', async () => {
+    const { FakeClient, clients } = createClientHarness();
+    const provider = createWebJsProvider(
+      {},
+      {
+        ClientCtor: FakeClient,
+        LocalAuthCtor: FakeLocalAuth,
+      },
+    );
+
+    await provider.initialize();
+
+    let resolveTyping;
+    clients[0].pupPage.evaluate.mockReturnValue(
+      new Promise((resolve) => {
+        resolveTyping = resolve;
+      }),
+    );
+
+    const first = provider.sendMessage.sendTypingIndicator(
+      'message-1',
+      '212600000000',
+    );
+    const second = provider.sendMessage.sendTypingIndicator(
+      'message-1',
+      '212600000000',
+    );
+
+    expect(clients[0].pupPage.evaluate).toHaveBeenCalledTimes(1);
+    resolveTyping(true);
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(true);
+    await provider.drain();
+  });
+
+  it('times out a stuck typing operation without retrying it', async () => {
+    vi.useFakeTimers();
+    const { FakeClient, clients } = createClientHarness();
+    const provider = createWebJsProvider(
+      {},
+      {
+        ClientCtor: FakeClient,
+        LocalAuthCtor: FakeLocalAuth,
+      },
+    );
+
+    await provider.initialize();
+
+    let resolveTyping;
+    clients[0].pupPage.evaluate.mockReturnValue(
+      new Promise((resolve) => {
+        resolveTyping = resolve;
+      }),
+    );
+
+    const result = provider.sendMessage.sendTypingIndicator(
+      'message-1',
+      '212600000000',
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(result).resolves.toBe(false);
+    expect(clients[0].pupPage.evaluate).toHaveBeenCalledTimes(1);
+
+    resolveTyping(true);
+    await vi.runAllTimersAsync();
+    await provider.drain();
   });
 
   it('ignores group, broadcast, self-authored, and empty messages', async () => {

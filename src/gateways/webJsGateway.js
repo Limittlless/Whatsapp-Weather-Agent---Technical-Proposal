@@ -15,6 +15,7 @@ const { Client: DefaultClient, LocalAuth: DefaultLocalAuth } = whatsappWeb;
 const DEFAULT_AUTH_PATH = '.wwebjs_auth';
 const DEFAULT_RECONNECT_DELAY_MS = 10_000;
 const READY_RECOVERY_DELAY_MS = 3_000;
+const TYPING_INDICATOR_TIMEOUT_MS = 1_000;
 const WEB_JS_SUFFIX = '@c.us';
 const SINGLETON_FILE_NAMES = [
   'SingletonLock',
@@ -83,7 +84,7 @@ export function createWebJsProvider(
 
   const activeTasks = new Set();
   const recipientIds = new Map();
-  const messageContexts = new Map();
+  const typingIndicatorTasks = new Map();
 
   let client = null;
   let startPromise = null;
@@ -127,11 +128,17 @@ export function createWebJsProvider(
       puppeteer.executablePath = executablePath;
     }
 
-    return new ClientCtor({
+    const clientOptions = {
       authStrategy: new LocalAuthCtor(localAuthOptions),
       puppeteer,
-      webVersionCache: { type: 'none' },
-    });
+    };
+    const webVersion = env.WHATSAPP_WEB_JS_WEB_VERSION?.trim();
+
+    if (webVersion) {
+      clientOptions.webVersion = webVersion;
+    }
+
+    return new ClientCtor(clientOptions);
   }
 
   async function safeDestroy(instance) {
@@ -349,10 +356,6 @@ export function createWebJsProvider(
         }
 
         recipientIds.set(whatsappId, sourceId);
-        if (messageId) {
-          messageContexts.set(messageId, message);
-        }
-
         return processIncomingMessageFn(
           { whatsappId, userMessage, messageId },
           { sendMessageFn: sendMessage },
@@ -365,9 +368,6 @@ export function createWebJsProvider(
     activeTasks.add(task);
     task.finally(() => {
       activeTasks.delete(task);
-      if (messageId) {
-        messageContexts.delete(messageId);
-      }
     });
   }
 
@@ -449,6 +449,7 @@ export function createWebJsProvider(
     const previousClient = client;
     client = null;
     isReady = false;
+    typingIndicatorTasks.clear();
     await safeDestroy(previousClient);
 
     if (isStopping) {
@@ -528,50 +529,64 @@ export function createWebJsProvider(
     }
   }
 
-  async function resolveChatForTyping(messageId, whatsappId) {
-    const sourceMessage = messageContexts.get(messageId);
+  async function sendTypingIndicator(_messageId, whatsappId) {
+    const activeClient = client;
 
-    if (sourceMessage?.getChat) {
-      return sourceMessage.getChat();
+    if (!activeClient || !isReady || !activeClient.pupPage?.evaluate) {
+      return false;
     }
 
     const chatId = resolveRecipientId(whatsappId);
+    const existingTask = typingIndicatorTasks.get(chatId);
 
-    try {
-      return await client.getChatById(chatId);
-    } catch (error) {
-      console.warn(
-        '[webJsGateway] getChatById failed, retrying once:',
-        error instanceof Error ? error.stack || error.message : error,
-      );
-      await new Promise((resolve) => setTimeoutFn(resolve, 500));
-      return client.getChatById(chatId);
-    }
-  }
-
-  async function sendTypingIndicator(messageId, whatsappId) {
-    if (!client || !isReady) {
-      return;
+    if (existingTask) {
+      return existingTask.result;
     }
 
-    try {
-      const chat = await resolveChatForTyping(messageId, whatsappId);
-
-      if (!chat || typeof chat.sendStateTyping !== 'function') {
-        console.warn(
-          '[webJsGateway] Skipping typing indicator: chat is not ' +
-            `fully loaded yet for ${whatsappId ?? 'unknown recipient'}.`,
-        );
-        return;
+    // Chat.sendStateTyping() first resolves a full chat model. Calling the
+    // same injected chat-state bridge directly avoids that fragile lookup.
+    const operation = activeClient.pupPage.evaluate((targetChatId) => {
+      if (typeof window.WWebJS?.sendChatstate !== 'function') {
+        return false;
       }
 
-      await chat.sendStateTyping();
-    } catch (error) {
-      console.warn(
-        '[webJsGateway] Failed to send typing indicator:',
-        error instanceof Error ? error.stack || error.message : error,
-      );
-    }
+      return window.WWebJS
+        .sendChatstate('typing', targetChatId)
+        .then(() => true);
+    }, chatId);
+
+    const settledOperation = operation
+      .then((sent) => sent === true)
+      .catch((error) => {
+        console.warn(
+          '[webJsGateway] Failed to send typing indicator:',
+          error instanceof Error ? error.stack || error.message : error,
+        );
+        return false;
+      })
+      .finally(() => {
+        if (typingIndicatorTasks.get(chatId)?.operation === settledOperation) {
+          typingIndicatorTasks.delete(chatId);
+        }
+      });
+
+    let timeoutId;
+    const timeoutResult = new Promise((resolve) => {
+      timeoutId = setTimeoutFn(() => resolve(false), TYPING_INDICATOR_TIMEOUT_MS);
+      timeoutId?.unref?.();
+    });
+    const result = Promise.race([settledOperation, timeoutResult]).finally(() => {
+      if (timeoutId) {
+        clearTimeoutFn(timeoutId);
+      }
+    });
+
+    typingIndicatorTasks.set(chatId, {
+      operation: settledOperation,
+      result,
+    });
+
+    return result;
   }
 
   sendMessage.sendTypingIndicator = sendTypingIndicator;
@@ -637,7 +652,7 @@ export function createWebJsProvider(
       await Promise.resolve(startPromise).catch(() => {});
 
       recipientIds.clear();
-      messageContexts.clear();
+      typingIndicatorTasks.clear();
     },
   };
 }

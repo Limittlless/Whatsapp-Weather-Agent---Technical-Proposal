@@ -130,10 +130,13 @@ describe('processIncomingMessage', () => {
       'message-1',
       '212600000000',
     );
-    expect(deps.runAgentFn).toHaveBeenCalledWith({
-      whatsappId: '212600000000',
-      userMessage: 'Hello',
-    });
+    expect(deps.runAgentFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        whatsappId: '212600000000',
+        userMessage: 'Hello',
+        traceId: expect.any(String),
+      }),
+    );
     expect(sendMessageFn).toHaveBeenCalledWith(
       '212600000000',
       'Agent reply',
@@ -190,6 +193,56 @@ describe('processIncomingMessage', () => {
     const callsAfterFailure = typingIndicator.mock.calls.length;
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(typingIndicator.mock.calls.length).toBe(callsAfterFailure);
+  });
+
+  it('stops refreshing after the provider rejects a typing attempt', async () => {
+    const typingIndicator = vi.fn().mockResolvedValue(false);
+    const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+    sendMessageFn.sendTypingIndicator = typingIndicator;
+
+    const deps = createDependencies({
+      sendMessageFn,
+      runAgentFn: vi.fn(
+        () => new Promise((resolve) => setTimeout(() => resolve('Reply'), 50)),
+      ),
+      typingIndicatorRefreshMs: 10,
+    });
+
+    await processIncomingMessage(createMessage(), deps);
+
+    expect(typingIndicator).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not overlap typing refreshes', async () => {
+    let resolveTyping;
+    const typingIndicator = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveTyping = resolve;
+        }),
+    );
+    const sendMessageFn = vi.fn().mockResolvedValue(undefined);
+    sendMessageFn.sendTypingIndicator = typingIndicator;
+
+    let resolveAgent;
+    const deps = createDependencies({
+      sendMessageFn,
+      runAgentFn: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveAgent = resolve;
+          }),
+      ),
+      typingIndicatorRefreshMs: 10,
+    });
+
+    const processing = processIncomingMessage(createMessage(), deps);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(typingIndicator).toHaveBeenCalledTimes(1);
+
+    resolveTyping(true);
+    resolveAgent('Reply');
+    await processing;
   });
 
   it('sends a retry reply after an unexpected processing failure', async () => {

@@ -1,4 +1,5 @@
 import { getSupabaseClient } from '../config/supabaseClient.js';
+import { measureLatency } from './latency.js';
 
 const tails = new Map();
 
@@ -20,12 +21,12 @@ const unlockedContext = Object.freeze({
   assertLockHeld() {},
 });
 
-export function runExclusive(key, task) {
+export function runExclusive(key, task, { traceId } = {}) {
   const previousTail = tails.get(key) ?? Promise.resolve();
 
   const current = previousTail.then(
-    () => executeWithDistributedLock(key, task),
-    () => executeWithDistributedLock(key, task),
+    () => executeWithDistributedLock(key, task, traceId),
+    () => executeWithDistributedLock(key, task, traceId),
   );
 
   const tailForChaining = current.then(
@@ -44,7 +45,7 @@ export function runExclusive(key, task) {
   return current;
 }
 
-async function executeWithDistributedLock(key, task) {
+async function executeWithDistributedLock(key, task, traceId) {
   let supabase;
 
   if (clientOverride !== undefined) {
@@ -59,14 +60,17 @@ async function executeWithDistributedLock(key, task) {
 
   if (!supabase) return task(unlockedContext);
 
-  const ownerId = await acquireDistributedLock(key, supabase).catch(
-    (error) => {
-      console.error(
-        `[keyedQueue] Failed to acquire distributed lock for "${key}":`,
-        error instanceof Error ? error.message : error,
-      );
-      throw error;
-    },
+  const ownerId = await measureLatency(
+    traceId,
+    'lock.acquire',
+    () =>
+      acquireDistributedLock(key, supabase).catch((error) => {
+        console.error(
+          `[keyedQueue] Failed to acquire distributed lock for "${key}":`,
+          error instanceof Error ? error.message : error,
+        );
+        throw error;
+      }),
   );
 
   const lease = startLockRenewal(key, ownerId, supabase);
@@ -78,7 +82,11 @@ async function executeWithDistributedLock(key, task) {
     try {
       await lease.stop();
     } finally {
-      await releaseDistributedLock(key, ownerId, supabase);
+      await measureLatency(
+        traceId,
+        'lock.release',
+        () => releaseDistributedLock(key, ownerId, supabase),
+      );
     }
   }
 }

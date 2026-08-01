@@ -33,7 +33,13 @@ export default [
     },
   },
   {
-    ignores: ['node_modules/', 'dist/', 'coverage/'],
+    ignores: [
+      'node_modules/',
+      'dist/',
+      'coverage/',
+      '.wwebjs_auth/**',
+      '.wwebjs_cache*/**',
+    ],
   },
   {
     files: ['src/gateways/webJsGateway.js'],
