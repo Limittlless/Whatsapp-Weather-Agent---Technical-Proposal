@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { runAgent as defaultRunAgent } from './runAgent.js';
 import {
   isAdminCommandMessage,
@@ -6,6 +8,11 @@ import {
 import { isAdminNumber as defaultIsAdminNumber } from '../services/adminAuth.js';
 import { claimMessage as defaultClaimMessage } from '../services/processedMessages.js';
 import { isUserAuthorized as defaultIsUserAuthorized } from '../services/userAuthorization.js';
+import {
+  finishLatencyTimer,
+  measureLatency,
+  startLatencyTimer,
+} from '../lib/latency.js';
 
 export const ACCESS_DENIED_MESSAGE =
   '⛔ هذا الرقم غير مصرح له باستخدام البوت.\n' +
@@ -46,8 +53,16 @@ export async function processIncomingMessage(
     );
   }
 
+  const traceId = randomUUID();
+  const pipelineStartedAt = startLatencyTimer();
+  let pipelineStatus = 'ok';
+
   try {
-    const shouldProcess = await claimMessageFn(messageId, whatsappId);
+    const shouldProcess = await measureLatency(
+      traceId,
+      'message.claim',
+      () => claimMessageFn(messageId, whatsappId),
+    );
 
     if (!shouldProcess) {
       console.log(
@@ -75,7 +90,11 @@ export async function processIncomingMessage(
       let isAuthorized;
 
       try {
-        isAuthorized = await isAuthorizedFn(whatsappId);
+        isAuthorized = await measureLatency(
+          traceId,
+          'authorization.check',
+          () => isAuthorizedFn(whatsappId),
+        );
       } catch (error) {
         console.error(
           '[messagePipeline] Authorization check failed:',
@@ -91,28 +110,64 @@ export async function processIncomingMessage(
       }
     }
 
+    let typingIndicatorEnabled = Boolean(
+      sendMessageFn.sendTypingIndicator,
+    );
+    let typingIndicatorInFlight = false;
+
     const refreshTypingIndicator = () => {
-      sendMessageFn.sendTypingIndicator?.(messageId, whatsappId);
+      if (!typingIndicatorEnabled || typingIndicatorInFlight) {
+        return;
+      }
+
+      typingIndicatorInFlight = true;
+      Promise.resolve(
+        sendMessageFn.sendTypingIndicator(messageId, whatsappId),
+      )
+        .then((sent) => {
+          if (sent === false) {
+            typingIndicatorEnabled = false;
+          }
+        })
+        .catch((error) => {
+          typingIndicatorEnabled = false;
+          console.warn(
+            '[messagePipeline] Disabling typing indicator after failure:',
+            error instanceof Error ? error.message : error,
+          );
+        })
+        .finally(() => {
+          typingIndicatorInFlight = false;
+        });
     };
 
     refreshTypingIndicator();
 
-    const typingIntervalId = sendMessageFn.sendTypingIndicator
+    const typingIntervalId = typingIndicatorEnabled
       ? setInterval(refreshTypingIndicator, typingIndicatorRefreshMs)
       : null;
 
     let reply;
 
     try {
-      reply = await runAgentFn({ whatsappId, userMessage });
+      reply = await measureLatency(
+        traceId,
+        'agent.total',
+        () => runAgentFn({ whatsappId, userMessage, traceId }),
+      );
     } finally {
       if (typingIntervalId) {
         clearInterval(typingIntervalId);
       }
     }
 
-    await sendMessageFn(whatsappId, reply);
+    await measureLatency(
+      traceId,
+      'whatsapp.send',
+      () => sendMessageFn(whatsappId, reply),
+    );
   } catch (error) {
+    pipelineStatus = 'error';
     console.error(
       '[messagePipeline] Failed to process an incoming message:',
       error,
@@ -126,5 +181,12 @@ export async function processIncomingMessage(
         sendError,
       );
     }
+  } finally {
+    finishLatencyTimer(
+      traceId,
+      'message.total',
+      pipelineStartedAt,
+      pipelineStatus,
+    );
   }
 }

@@ -1,10 +1,9 @@
 import 'dotenv/config';
 import { ChatGoogle } from '@langchain/google';
 
-import { geocodingTool } from '../tools/geocodingTool.js';
-import { weatherTool } from '../tools/weatherTool.js';
+import { weatherByLocationTool } from '../tools/weatherByLocationTool.js';
 
-export const agentTools = [geocodingTool, weatherTool];
+export const agentTools = [weatherByLocationTool];
 
 export function createGeminiModel() {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -20,7 +19,7 @@ export function createGeminiModel() {
   const model = new ChatGoogle({
     model: modelName,
     apiKey,
-    reasoningEffort: 'low',
+    reasoningEffort: 'minimal',
     maxOutputTokens: 1024,
     maxRetries: 0,
   });

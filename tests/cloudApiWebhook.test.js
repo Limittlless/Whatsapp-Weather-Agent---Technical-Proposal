@@ -165,10 +165,13 @@ describe('createCloudApiWebhookRouter', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(runAgentFn).toHaveBeenCalledWith({
-        whatsappId: '212600000000',
-        userMessage: 'What is the weather in Agadir?',
-      });
+      expect(runAgentFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          whatsappId: '212600000000',
+          userMessage: 'What is the weather in Agadir?',
+          traceId: expect.any(String),
+        }),
+      );
       expect(sendMessageFn).toHaveBeenCalledWith(
         '212600000000',
         'It is 30°C in Agadir.'
@@ -390,10 +393,13 @@ describe('createCloudApiWebhookRouter', () => {
         .send(createTextPayload({ from: '212688888888' }));
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(runAgentFn).toHaveBeenCalledWith({
-        whatsappId: '212688888888',
-        userMessage: 'Hello',
-      });
+      expect(runAgentFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          whatsappId: '212688888888',
+          userMessage: 'Hello',
+          traceId: expect.any(String),
+        }),
+      );
       expect(sendMessageFn).toHaveBeenCalledWith(
         '212688888888',
         'Authorized reply'
@@ -632,10 +638,13 @@ describe('createCloudApiWebhookRouter', () => {
       await request(app).post('/webhook').send(payload);
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(runAgentFn).toHaveBeenCalledWith({
-        whatsappId: '212699999999',
-        userMessage: '/uptime',
-      });
+      expect(runAgentFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          whatsappId: '212699999999',
+          userMessage: '/uptime',
+          traceId: expect.any(String),
+        }),
+      );
       expect(sendMessageFn).toHaveBeenCalledWith(
         '212699999999',
         'Just a normal reply'
@@ -674,10 +683,13 @@ describe('createCloudApiWebhookRouter', () => {
       await request(app).post('/webhook').send(payload);
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(runAgentFn).toHaveBeenCalledWith({
-        whatsappId: '212600000000',
-        userMessage: 'What is the weather in Rabat?',
-      });
+      expect(runAgentFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          whatsappId: '212600000000',
+          userMessage: 'What is the weather in Rabat?',
+          traceId: expect.any(String),
+        }),
+      );
       expect(sendMessageFn).toHaveBeenCalledWith(
         '212600000000',
         'Weather reply'
@@ -752,10 +764,13 @@ describe('createCloudApiWebhookRouter', () => {
       await request(app).post('/webhook').send(payload);
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(runAgentFn).toHaveBeenCalledWith({
-        whatsappId: '212600000000',
-        userMessage: '/status',
-      });
+      expect(runAgentFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          whatsappId: '212600000000',
+          userMessage: '/status',
+          traceId: expect.any(String),
+        }),
+      );
       expect(sendMessageFn).toHaveBeenCalledWith(
         '212600000000',
         'Normal reply'

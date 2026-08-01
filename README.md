@@ -28,6 +28,8 @@ The Cloud API provider receives messages at `/webhook`. In production,
 WHATSAPP_PROVIDER=web_js
 WHATSAPP_WEB_JS_AUTH_PATH=.wwebjs_auth
 WHATSAPP_WEB_JS_RECONNECT_DELAY_MS=10000
+# Optional: pin a version already verified in staging.
+WHATSAPP_WEB_JS_WEB_VERSION=
 ```
 
 On the first start, scan the QR code printed in the service logs. The

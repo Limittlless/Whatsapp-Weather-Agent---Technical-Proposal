@@ -2,6 +2,7 @@ import { AIMessage, HumanMessage } from '@langchain/core/messages';
 
 import { createGeminiModel } from '../config/geminiClient.js';
 import { runExclusive } from '../lib/keyedQueue.js';
+import { measureLatency } from '../lib/latency.js';
 import { withRetry, defaultIsRetryable } from '../lib/retry.js';
 import {
   flushConversationHistory,
@@ -92,26 +93,46 @@ function isDegenerateReply(content) {
   return false;
 }
 
-export async function runAgent({ whatsappId, userMessage, model }) {
+export async function runAgent({ whatsappId, userMessage, model, traceId }) {
   if (!whatsappId?.trim()) {
     throw new Error('whatsappId is required.');
   }
 
-  return runExclusive(whatsappId, (lock) =>
-    runAgentInternal({ whatsappId, userMessage, model, lock }),
+  return runExclusive(
+    whatsappId,
+    (lock) =>
+      runAgentInternal({
+        whatsappId,
+        userMessage,
+        model,
+        lock,
+        traceId,
+      }),
+    { traceId },
   );
 }
 
-async function runAgentInternal({ whatsappId, userMessage, model, lock }) {
+async function runAgentInternal({
+  whatsappId,
+  userMessage,
+  model,
+  lock,
+  traceId,
+}) {
   let messages;
 
   try {
     lock.assertLockHeld();
     const activeModel = model ?? createGeminiModel();
 
-    const storedHistory = await getCachedConversationHistory(whatsappId, {
-      forceRefresh: true,
-    });
+    const storedHistory = await measureLatency(
+      traceId,
+      'history.load',
+      () =>
+        getCachedConversationHistory(whatsappId, {
+          forceRefresh: true,
+        }),
+    );
     lock.assertLockHeld();
 
     const preparedHistory = prepareConversationHistory(
@@ -132,9 +153,15 @@ async function runAgentInternal({ whatsappId, userMessage, model, lock }) {
         async () => {
           attemptsMade += 1;
           try {
-            const result = await activeModel.invoke(messages, {
-              signal: lock.signal,
-            });
+            const result = await measureLatency(
+              traceId,
+              'gemini.invoke',
+              () =>
+                activeModel.invoke(messages, {
+                  signal: lock.signal,
+                }),
+              { iteration: iteration + 1, attempt: attemptsMade },
+            );
             recordGeminiCall({ ok: true });
             return result;
           } catch (error) {
@@ -175,8 +202,17 @@ async function runAgentInternal({ whatsappId, userMessage, model, lock }) {
       if (toolCalls.length > 0) {
         messages.push(aiMessage);
 
-        const toolMessages = await Promise.all(
-          toolCalls.map((toolCall) => executeToolCall(toolCall)),
+        const toolMessages = await measureLatency(
+          traceId,
+          'tools.execute',
+          () =>
+            Promise.all(
+              toolCalls.map((toolCall) => executeToolCall(toolCall)),
+            ),
+          {
+            iteration: iteration + 1,
+            tools: toolCalls.map((toolCall) => toolCall.name),
+          },
         );
         lock.assertLockHeld();
 
@@ -195,7 +231,12 @@ async function runAgentInternal({ whatsappId, userMessage, model, lock }) {
 
         messages.push(new AIMessage('One moment, let me check that.'));
 
-        const toolMessage = await executeToolCall(recoveredCall);
+        const toolMessage = await measureLatency(
+          traceId,
+          'tools.execute_recovered',
+          () => executeToolCall(recoveredCall),
+          { iteration: iteration + 1, tools: [recoveredCall.name] },
+        );
         lock.assertLockHeld();
 
         messages.push(
@@ -223,7 +264,11 @@ async function runAgentInternal({ whatsappId, userMessage, model, lock }) {
 
         lock.assertLockHeld();
         setCachedConversationHistory(whatsappId, updatedHistory, { lock });
-        await flushConversationHistory(whatsappId);
+        await measureLatency(
+          traceId,
+          'history.flush',
+          () => flushConversationHistory(whatsappId),
+        );
         lock.assertLockHeld();
 
         return 'عذرًا، حدث خطأ أثناء معالجة طلبك. من فضلك أعد إرسال سؤالك.';
@@ -237,7 +282,11 @@ async function runAgentInternal({ whatsappId, userMessage, model, lock }) {
 
       lock.assertLockHeld();
       setCachedConversationHistory(whatsappId, updatedHistory, { lock });
-      await flushConversationHistory(whatsappId);
+      await measureLatency(
+        traceId,
+        'history.flush',
+        () => flushConversationHistory(whatsappId),
+      );
       lock.assertLockHeld();
 
       return replyText;
@@ -275,7 +324,11 @@ async function runAgentInternal({ whatsappId, userMessage, model, lock }) {
 
         lock.assertLockHeld();
         setCachedConversationHistory(whatsappId, updatedHistory, { lock });
-        await flushConversationHistory(whatsappId);
+        await measureLatency(
+          traceId,
+          'history.flush_after_error',
+          () => flushConversationHistory(whatsappId),
+        );
         lock.assertLockHeld();
       } catch (saveError) {
         console.error(
